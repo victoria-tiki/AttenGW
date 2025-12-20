@@ -1,4 +1,6 @@
-# Wavenet Torch Implementation for Gravitational Wave Classification
+Currently in progress, please come back later for the complete software package
+
+# AttenGW for Gravitational Wave Classification
 
 ---
 
