@@ -1,4 +1,4 @@
-Currently in progress, please come back later for the complete software package
+The scripts work as modular components, but containerization and documentation are still under active development.
 
 # AttenGW for Gravitational Wave Classification
 

@@ -16,8 +16,6 @@ from torch.utils.data.distributed import DistributedSampler
 
 
 
-
-
 class whiten:
     @staticmethod
     def whiten(strain, interp_psd, dt, floor=1e-48):
