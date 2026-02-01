@@ -15,6 +15,8 @@ mkdir -p logs
 DATA_DIR="/path/to/train_test_hdf_dir"
 NOISE_DIR="/path/to/noise_dir"
 CKPT_DIR="/path/to/checkpoints_dir"
+TRAIN_FILE="train.hdf"
+VAL_FILE="val.hdf"
 
 # ===== OPTIONAL (check train.py for documentation) =====
 BATCH_SIZE=32
@@ -33,6 +35,8 @@ srun python -u train.py \
   --data_dir "${DATA_DIR}" \
   --checkpoint_dir "${CKPT_DIR}" \
   --noise_dir "${NOISE_DIR}" \
+  --train_file "${TRAIN_FILE}" \
+  --val_file "${VAL_FILE}" \
   --num_workers "${NUM_WORKERS}" \
   --num_nodes "${NUM_NODES}" \
   --lr_init "${LR_INIT}" \
