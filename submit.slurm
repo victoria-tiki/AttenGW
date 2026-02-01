@@ -45,3 +45,5 @@ srun python -u train.py \
   --p_higher_fin "${P_HIGHER_FIN}" \
   --segment_length "${SEGMENT_LENGTH}" \
   --dim "${DIM}"
+# If your noise files are already whitened, add:
+# --noise_is_whitened
