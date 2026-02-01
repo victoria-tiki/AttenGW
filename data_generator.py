@@ -5,7 +5,6 @@ import h5py
 import pickle
 import os
 import glob
-from noise_snr_schedule import *
 import scipy.interpolate
 import matplotlib.pyplot as plt
 from scipy.signal import butter, filtfilt, fftconvolve
@@ -13,6 +12,8 @@ from scipy.signal import butter, filtfilt, fftconvolve
 from torch.utils.data import Sampler, WeightedRandomSampler
 from pytorch_lightning import LightningDataModule
 from torch.utils.data.distributed import DistributedSampler
+
+
 
 
 
@@ -71,7 +72,7 @@ class whiten:
 
 #original 4096 file segment, with possibility of being moved outside the window
 
-    
+    @staticmethod
     def load_interp_psd(path):
         psd_obj = pickle.load(open(path, "rb"), encoding="bytes")
     
@@ -199,24 +200,31 @@ def plot_examples(X_batch, y_batch, snrs, wL_clean=None, wH_clean=None, save_pat
 
                           
 class GWDataset(Dataset):
+
     def __init__(self, noise_dir, data_dir, batch_size=32, dim=2048, n_channels=2,
-                 shuffle=True, train=True, gaussian=False, split_ratio=0.8, noise_prob=0.6, noise_range=None,
-                 initial_epoch=1, segment_length=4096, merger_out_prob=0.2,
-                 validation_epoch=None, p_higher_init=0.5, p_higher_fin=0.05):
+             shuffle=True, train=True, gaussian=False, noise_prob=0.6,
+             initial_epoch=1, segment_length=4096, merger_out_prob=0.2,
+             validation_epoch=None, p_higher_init=0.5, p_higher_fin=0.05,
+             train_file="train.hdf", val_file="test.hdf",
+             noise_is_whitened=False,noise_range=None,):
 
         self.noise_dir = noise_dir
         self.segment_length = segment_length
         self.label_width = dim
-
+        self.train_file = train_file
+        self.val_file = val_file
+        self.noise_is_whitened = noise_is_whitened
+        self.noise_range = noise_range
+        
         # ============================================================
         # train=True  -> use train.hdf5
         # train=False -> use val.hdf5
         # ============================================================
         if train:
-            data_path = os.path.join(data_dir, "train_500.hdf")
+            data_path = os.path.join(data_dir, self.train_file)
         else:
-            data_path = os.path.join(data_dir, "test_500.hdf")
-
+            data_path = os.path.join(data_dir, self.val_file)
+            
         self.data_files = [data_path]
         self.file_handlers = [h5py.File(data_path, "r")]
 
@@ -305,7 +313,10 @@ class GWDataset(Dataset):
         file_idx, sample_idx = self.indices[index]
     
         if self.plotsamples:
-            X, y, snr, wL_clean, wH_clean = self.__data_generation(file_idx, sample_idx, plot_samples=True)
+            if self.noise_is_whitened:
+                X, y, snr, wL_clean, wH_clean = self.__data_generation_old(file_idx, sample_idx)
+            else:
+                X, y, snr, wL_clean, wH_clean = self.__data_generation(file_idx, sample_idx, plot_samples=True)
             snr_arr = np.array([snr], dtype=np.float32)
             return (
                 torch.from_numpy(X),
@@ -315,11 +326,15 @@ class GWDataset(Dataset):
                 torch.from_numpy(wH_clean.copy()),
             )
         else:
-            X, y = self.__data_generation(file_idx, sample_idx)
+            if self.noise_is_whitened:
+                X, y = self.__data_generation_old(file_idx, sample_idx, plot_samples=False)
+            else:
+                X, y = self.__data_generation(file_idx, sample_idx)
             return (
                 torch.from_numpy(X),
                 torch.from_numpy(y),
             )
+            
             
     def _make_band_limited_psd(self, freqs, psd_arr):
         """
@@ -457,7 +472,7 @@ class GWDataset(Dataset):
             
         not compatible with plot_sample_waveforms=True
         """
-
+        from noise_snr_schedule import noise_range_map, low_max_snr
 
         X = np.zeros((self.segment_length, self.n_channels), dtype=np.float32)
         y = np.zeros((self.segment_length, 1), dtype=np.float32)
@@ -470,8 +485,8 @@ class GWDataset(Dataset):
 
         #process signal+noise sample
         if np.random.random_sample() > self.noise_prob:
-            merger_L1 = np.argmax(np.abs(strain_L1))
-            merger_H1 = np.argmax(np.abs(strain_H1))
+            merger_L1 = np.argmax(np.abs(raw_L1))
+            merger_H1 = np.argmax(np.abs(raw_H1))
             shared_merger = (merger_L1 + merger_H1) // 2
 
             if self.gaussian:
@@ -480,17 +495,27 @@ class GWDataset(Dataset):
                 file_idx_noise = np.random.randint(len(self.noise_files))
                 whitened_noise_strain_fn = self.noise_files[file_idx_noise]
             else:
-                #NOTE: must load whitened noise to work with this dataloader
+                # NOTE: must load whitened noise to work with this dataloader
                 file_idx_noise = np.random.randint(len(self.noise_files))
-                psd_L1 = whiten.load_interp_psd(self.psd_L1_files[file_idx_noise])
-                psd_H1 = whiten.load_interp_psd(self.psd_H1_files[file_idx_noise])
-
                 whitened_noise_strain_fn = self.noise_files[file_idx_noise]
+            
+                nf = self.noise_handlers[file_idx_noise]  # already opened in __init__
+                freqs = np.asarray(nf["freqs"][()]).squeeze()
+                psd_L_arr = np.asarray(nf["psd_L1"][()]).squeeze()
+                psd_H_arr = np.asarray(nf["psd_H1"][()]).squeeze()
+            
+                psd_L1 = scipy.interpolate.interp1d(
+                    freqs, psd_L_arr, bounds_error=False, fill_value=(psd_L_arr[0], psd_L_arr[-1])
+                )
+                psd_H1 = scipy.interpolate.interp1d(
+                    freqs, psd_H_arr, bounds_error=False, fill_value=(psd_H_arr[0], psd_H_arr[-1])
+                )
 
             #whiten signal
             strain_whiten_L, strain_whiten_H = whiten.whiten_signal(
-                strain_L1, strain_H1, self.dt, psd_L1, psd_H1
+                raw_L1, raw_H1, self.dt, psd_L1, psd_H1
             )
+
 
             # zero out edges to remove whitening artifacts
             truncation = self.TRUNC
@@ -508,7 +533,7 @@ class GWDataset(Dataset):
                 start_idx = max(0, shared_merger - self.segment_length + np.random.randint(self.segment_length // 4, self.segment_length // 2))
             end_idx = start_idx + self.segment_length
 
-            full_target = np.zeros_like(strain_L1)
+            full_target = np.zeros_like(raw_L1)
             label_start = max(0, shared_merger - self.label_width)
             full_target[label_start:shared_merger + 1] = 1
 
@@ -527,7 +552,12 @@ class GWDataset(Dataset):
 
             # consistent SNR for validation 
             current_epoch = self.fixed_epoch if self.fixed_epoch is not None else self.epoch
-            noise_range = self.noise_range if self.noise_range else low_max_snr(current_epoch, noise_range_map)
+            if self.noise_range is not None:
+                low_snr, high_snr = self.noise_range
+            else:
+                low_snr, high_snr = low_max_snr(current_epoch, noise_range_map)
+
+            noise_range = (low_snr, high_snr)
             
             if not hasattr(self, "_logged_snr_this_epoch"):
                 label = "VAL" if self.fixed_epoch is not None else "TRAIN"
@@ -861,9 +891,11 @@ class GWDataset(Dataset):
 
 class WaveformDataModule(LightningDataModule):
     def __init__(self, noise_dir, data_dir, batch_size=32, dim=1024, n_channels=2,
-                 shuffle=True, gaussian=False, split_ratio=0.8, noise_prob=0.7, noise_range=None,
+                 shuffle=True, gaussian=False, noise_prob=0.7, noise_range=None,
                  num_workers=1, initial_epoch=0, segment_length=4096,
-                 merger_out_prob=0.0, validation_epoch=10, p_higher_init=0.5, p_higher_fin=0.1):
+                 merger_out_prob=0.0, validation_epoch=10, p_higher_init=0.5, p_higher_fin=0.1,
+                 train_file="train.hdf", val_file="test.hdf",
+                 noise_is_whitened=False):
         super().__init__()
         self.batch_size = batch_size
         self.dim = dim
@@ -881,23 +913,31 @@ class WaveformDataModule(LightningDataModule):
         self.validation_epoch = validation_epoch
         self.p_higher_init=p_higher_init
         self.p_higher_fin=p_higher_fin
+        self.train_file = train_file
+        self.val_file = val_file
+        self.noise_is_whitened = noise_is_whitened
 
     def setup(self, stage=None):
         if stage == 'fit' or stage is None:
             self.train_dataset = GWDataset(
                 self.noise_dir, self.data_dir, self.batch_size, dim=self.dim,
-                n_channels=self.n_channels, shuffle=True, train=True, split_ratio=0.8, gaussian=self.gaussian, noise_prob=self.noise_prob,
+                n_channels=self.n_channels, shuffle=True, train=True, gaussian=self.gaussian, noise_prob=self.noise_prob,
+                train_file=self.train_file, val_file=self.val_file,
+                noise_is_whitened=self.noise_is_whitened,
                 initial_epoch=self.initial_epoch, segment_length=self.segment_length,
                 merger_out_prob=self.merger_out_prob, 
                 p_higher_init=self.p_higher_init,p_higher_fin=self.p_higher_fin
             )
             self.val_dataset = GWDataset(
                 self.noise_dir, self.data_dir, self.batch_size, dim=self.dim,
-                n_channels=self.n_channels, shuffle=False, train=False, split_ratio=0.8, gaussian=self.gaussian, noise_prob=self.noise_prob,
+                n_channels=self.n_channels, shuffle=False, train=False, gaussian=self.gaussian, noise_prob=self.noise_prob,
+                train_file=self.train_file, val_file=self.val_file,
+                noise_is_whitened=self.noise_is_whitened,
                 initial_epoch=self.validation_epoch, segment_length=self.segment_length,
                 merger_out_prob=self.merger_out_prob, validation_epoch=self.validation_epoch, 
                 p_higher_init=self.p_higher_init,p_higher_fin=self.p_higher_fin
             )
+
 
 
         
