@@ -19,13 +19,12 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 import torch.nn.functional as F
 
-from pytorch_lightning import LightningDataModule
-from torch.optim.lr_scheduler import ReduceLROnPlateau, LambdaLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau#, LambdaLR
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, Callback,TQDMProgressBar
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint,TQDMProgressBar#, Callback
 from pytorch_lightning.loggers import TensorBoardLogger
-from torch.utils.data.distributed import DistributedSampler
+#from torch.utils.data.distributed import DistributedSampler
 
 from model import *
 from data_generator import *
@@ -127,7 +126,7 @@ def run_early_diagnostics(args, rank: int) -> None:
         return
 
     data_dir = args.data_dir
-    val_path = os.path.join(data_dir, "test_500.hdf")
+    val_path = os.path.join(args.data_dir, args.val_file)
 
     with h5py.File(val_path, "r") as f:
         grp = f["data"]
@@ -202,9 +201,13 @@ def run_early_diagnostics(args, rank: int) -> None:
 
 
 
-def plot_samples(args, rank: int, data_module) -> None:
+def plot_samples(args, rank: int) -> None:
     """Plot a batch of examples."""
     if rank != 0:
+        return
+    
+    if args.noise_is_whitened:
+        print("[rank 0] skipping plotting because noise_is_whitened=True (old dataloader path)", flush=True)
         return
 
     print(f'[rank {rank}] plotting waveforms', flush=True)
@@ -217,7 +220,13 @@ def plot_samples(args, rank: int, data_module) -> None:
         num_workers=args.num_workers,
         p_higher_init=0.5,
         p_higher_fin=0.1,
+        segment_length=args.segment_length,
+        dim=args.dim,
+        train_file=args.train_file,
+        val_file=args.val_file,
+        noise_is_whitened=args.noise_is_whitened,
     )
+
 
     plot_dm.setup(stage='fit')
     dataset = plot_dm.train_dataset
@@ -232,7 +241,8 @@ def plot_samples(args, rank: int, data_module) -> None:
 
     X_batch, y_batch, snr_batch, wL_clean, wH_clean = next(iter(plain_loader))
 
-    save_path = "training_batch_preview.png"
+    save_path = os.path.join(args.checkpoint_dir, "training_batch_preview.png")
+
     plot_examples(
         X_batch.numpy(),
         y_batch.numpy(),
@@ -247,25 +257,35 @@ def plot_samples(args, rank: int, data_module) -> None:
 def main():
     parser = argparse.ArgumentParser(description="gw detection")
 
-    parser.add_argument('--batch_size', type=int, help='batch size', default=32)
-
-    # Paths
-    parser.add_argument('--data_dir', type=str, required=True, help='root directory containing train_500.hdf/test_500.hdf')
-    parser.add_argument('--checkpoint_dir', type=str, required=True, help='directory to save checkpoints/plots')
-    parser.add_argument('--noise_dir', type=str, required=True, help='noise directory with *.hdf5 files')
-
-    parser.add_argument('--num_workers', type=int, help='number of workers in dataloader', default=1)
-    parser.add_argument('--num_nodes', type=int, help='number of nodes on HPC job', default=1)
-    parser.add_argument('--lr_init', type=float, help='initial learning rate', default=0.001)
-    parser.add_argument('--initial_epoch', type=int, help='Initial epoch for training continuation', default=0)
-
+    # Paths (must be set by user, no defaults)
+    parser.add_argument('--data_dir', required=True, help='Directory containing the injection HDF5 files')
+    parser.add_argument('--noise_dir', required=True, help='Directory containing the noise HDF5 files')
+    parser.add_argument('--checkpoint_dir', required=True, help='Output directory for checkpoints, logs, and plots')
+    
+    # --- injection file names  ---
+    parser.add_argument('--train_file', type=str, default='train.hdf', help='train injection file name inside data_dir')
+    parser.add_argument('--val_file', type=str, default='val.hdf', help='val injection file name inside data_dir')
+    
+    # --- training configuration ---
+    parser.add_argument('--batch_size', type=int, default=32, help='batch size')
+    parser.add_argument('--num_workers', type=int, default=1, help='number of workers in dataloader')
+    parser.add_argument('--num_nodes', type=int, default=1, help='number of nodes')
+    parser.add_argument('--lr_init', type=float, default=0.001, help='initial learning rate')
+    parser.add_argument('--initial_epoch', type=int, default=0, help='starting epoch counter (for curricula / schedules; no checkpoint resume)')
+    
     # Data-generation 
     parser.add_argument('--noise_prob', type=float, default=0.6, help='probability of sampling noise-only examples')
     parser.add_argument('--p_higher_init', type=float, default=0.9, help='initial probability of sampling higher snr range')
     parser.add_argument('--p_higher_fin', type=float, default=0.25, help='final probability of sampling higher snr range')
     parser.add_argument('--segment_length', type=int, default=4096, help='segment length fed to the model')
     parser.add_argument('--dim', type=int, default=1024, help='how many samples before merger at labeled as belonging to the signal class')
+    
+    # --- dataloader choice: old vs new (equivalent to whether noise is already whitened) ---
+    parser.add_argument('--noise_is_whitened', action='store_true',
+                        help='Use the OLD dataloader path (expects noise files to already be whitened). If unset, uses the NEW path (raw noise, whitened inside the generator).')
+                        
     args = parser.parse_args()
+    
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
@@ -293,8 +313,8 @@ def main():
         devices=devices,
         accelerator="gpu",
         strategy="ddp",
-        #limit_train_batches=0.001,
-        #limit_val_batches=0.001,
+        limit_train_batches=0.001,
+        limit_val_batches=0.001,
         enable_progress_bar=True,
         enable_model_summary=True,
         callbacks=callbacks,
@@ -313,11 +333,14 @@ def main():
         num_workers=args.num_workers,
         p_higher_init=args.p_higher_init,
         p_higher_fin=args.p_higher_fin,
+        train_file=args.train_file,
+        val_file=args.val_file,
+        noise_is_whitened=args.noise_is_whitened,
     )
 
     # Early-run diagnostics and plotting (rank 0 only)
     run_early_diagnostics(args, rank)
-    plot_samples(args, rank, data_module)
+    plot_samples(args, rank)
 
     #train
     t0 = time()
