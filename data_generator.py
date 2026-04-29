@@ -15,8 +15,6 @@ from torch.utils.data.distributed import DistributedSampler
 
 
 
-
-
 class whiten:
     @staticmethod
     def whiten(strain, interp_psd, dt, floor=1e-48):
@@ -141,7 +139,24 @@ class whiten:
         return np.sqrt(rho2)
 
         
-        
+def low_max_snr(epoch):
+    """Legacy SNR/noise-std schedule used only when noise_is_whitened=True."""
+    ranges = [
+        [0.0, 0.3],
+        [0.0, 0.6],
+        [0.0, 0.9],
+        [0.3, 1.2],
+        [0.3, 1.5],
+        [0.6, 1.8],
+        [0.6, 2.0],
+        [0.9, 2.0],
+        [1.0, 2.0],
+        [0.6, 2.0],
+    ]
+
+    boundaries = [2, 4, 6, 8, 10, 12, 14, 16, 28]
+    idx = np.searchsorted(boundaries, epoch, side="left")
+    return ranges[idx]       
     
 
 
@@ -315,7 +330,7 @@ class GWDataset(Dataset):
     
         if self.plotsamples:
             if self.noise_is_whitened:
-                X, y, snr, wL_clean, wH_clean = self.__data_generation_old(file_idx, sample_idx)
+                raise NotImplementedError("plot_samples is not supported for noise_is_whitened=True.")
             else:
                 X, y, snr, wL_clean, wH_clean = self.__data_generation(file_idx, sample_idx, plot_samples=True)
             snr_arr = np.array([snr], dtype=np.float32)
@@ -328,7 +343,7 @@ class GWDataset(Dataset):
             )
         else:
             if self.noise_is_whitened:
-                X, y = self.__data_generation_old(file_idx, sample_idx, plot_samples=False)
+                X, y = self.__data_generation_old(file_idx, sample_idx)
             else:
                 X, y = self.__data_generation(file_idx, sample_idx)
             return (
@@ -473,16 +488,16 @@ class GWDataset(Dataset):
             
         not compatible with plot_sample_waveforms=True
         """
-        from noise_snr_schedule import noise_range_map, low_max_snr
 
         X = np.zeros((self.segment_length, self.n_channels), dtype=np.float32)
         y = np.zeros((self.segment_length, 1), dtype=np.float32)
 
         f = self.file_handlers[file_idx]
-        raw = f['data'][sample_idx]
-        raw_H1 = raw[0]
-        raw_L1 = raw[1]
-        signal_len = raw.shape[-1]  # 16384
+        grp = f["data"]
+        
+        raw_H1 = grp["H1_wave"][sample_idx]
+        raw_L1 = grp["L1_wave"][sample_idx]
+        signal_len = raw_H1.shape[-1]
 
         #process signal+noise sample
         if np.random.random_sample() > self.noise_prob:
@@ -556,7 +571,7 @@ class GWDataset(Dataset):
             if self.noise_range is not None:
                 low_snr, high_snr = self.noise_range
             else:
-                low_snr, high_snr = low_max_snr(current_epoch, noise_range_map)
+                low_snr, high_snr = low_max_snr(current_epoch)
 
             noise_range = (low_snr, high_snr)
             
