@@ -221,6 +221,7 @@ def plot_samples(args, rank: int) -> None:
         p_higher_init=0.5,
         p_higher_fin=0.1,
         segment_length=args.segment_length,
+        edge_buffer=args.edge_buffer,
         dim=args.dim,
         train_file=args.train_file,
         val_file=args.val_file,
@@ -279,6 +280,7 @@ def main():
     parser.add_argument('--p_higher_fin', type=float, default=0.25, help='final probability of sampling higher snr range')
     parser.add_argument('--segment_length', type=int, default=4096, help='segment length fed to the model')
     parser.add_argument('--dim', type=int, default=1024, help='how many samples before merger at labeled as belonging to the signal class')
+    parser.add_argument('--edge_buffer', type=int, default=2048, help='Number of samples trimmed from each side after whitening/filtering to reduce edge artifacts.')
     
     # --- dataloader choice: old vs new (equivalent to whether noise is already whitened) ---
     parser.add_argument('--noise_is_whitened', action='store_true',
@@ -313,8 +315,6 @@ def main():
         devices=devices,
         accelerator="gpu",
         strategy="ddp",
-        #limit_train_batches=0.001,
-        #limit_val_batches=0.001,
         enable_progress_bar=True,
         enable_model_summary=True,
         callbacks=callbacks,
@@ -329,6 +329,7 @@ def main():
         batch_size=args.batch_size,
         dim=args.dim,
         segment_length=args.segment_length,
+        edge_buffer=args.edge_buffer,
         noise_prob=args.noise_prob,
         num_workers=args.num_workers,
         p_higher_init=args.p_higher_init,
