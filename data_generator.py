@@ -203,7 +203,7 @@ class GWDataset(Dataset):
 
     def __init__(self, noise_dir, data_dir, batch_size=32, dim=2048, n_channels=2,
              shuffle=True, train=True, gaussian=False, noise_prob=0.6,
-             initial_epoch=1, segment_length=4096, merger_out_prob=0.2,
+             initial_epoch=1, segment_length=4096, edge_buffer=2048, merger_out_prob=0.2,
              validation_epoch=None, p_higher_init=0.5, p_higher_fin=0.05,
              train_file="train.hdf", val_file="test.hdf",
              noise_is_whitened=False,noise_range=None,):
@@ -275,7 +275,8 @@ class GWDataset(Dataset):
         self.epoch = initial_epoch
         self.merger_out_prob = merger_out_prob
         self.fixed_epoch = validation_epoch
-        self.TRUNC = 4096//2
+        self.edge_buffer = edge_buffer
+        self.TRUNC = self.edge_buffer
         self.train = train
         self.plotsamples = False
         self.noise_handlers = [h5py.File(p, "r") for p in self.noise_files]
@@ -892,7 +893,7 @@ class GWDataset(Dataset):
 class WaveformDataModule(LightningDataModule):
     def __init__(self, noise_dir, data_dir, batch_size=32, dim=1024, n_channels=2,
                  shuffle=True, gaussian=False, noise_prob=0.7, noise_range=None,
-                 num_workers=1, initial_epoch=0, segment_length=4096,
+                 num_workers=1, initial_epoch=0, segment_length=4096, edge_buffer=2048,
                  merger_out_prob=0.0, validation_epoch=10, p_higher_init=0.5, p_higher_fin=0.1,
                  train_file="train.hdf", val_file="test.hdf",
                  noise_is_whitened=False):
@@ -909,6 +910,7 @@ class WaveformDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.initial_epoch = initial_epoch
         self.segment_length = segment_length
+        self.edge_buffer = edge_buffer
         self.merger_out_prob = merger_out_prob
         self.validation_epoch = validation_epoch
         self.p_higher_init=p_higher_init
@@ -924,7 +926,7 @@ class WaveformDataModule(LightningDataModule):
                 n_channels=self.n_channels, shuffle=True, train=True, gaussian=self.gaussian, noise_prob=self.noise_prob,
                 train_file=self.train_file, val_file=self.val_file,
                 noise_is_whitened=self.noise_is_whitened,
-                initial_epoch=self.initial_epoch, segment_length=self.segment_length,
+                initial_epoch=self.initial_epoch, segment_length=self.segment_length, edge_buffer=self.edge_buffer,
                 merger_out_prob=self.merger_out_prob, 
                 p_higher_init=self.p_higher_init,p_higher_fin=self.p_higher_fin
             )
@@ -933,7 +935,7 @@ class WaveformDataModule(LightningDataModule):
                 n_channels=self.n_channels, shuffle=False, train=False, gaussian=self.gaussian, noise_prob=self.noise_prob,
                 train_file=self.train_file, val_file=self.val_file,
                 noise_is_whitened=self.noise_is_whitened,
-                initial_epoch=self.validation_epoch, segment_length=self.segment_length,
+                initial_epoch=self.validation_epoch, segment_length=self.segment_length, edge_buffer=self.edge_buffer,
                 merger_out_prob=self.merger_out_prob, validation_epoch=self.validation_epoch, 
                 p_higher_init=self.p_higher_init,p_higher_fin=self.p_higher_fin
             )
