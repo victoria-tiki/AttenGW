@@ -1,35 +1,62 @@
 #!/bin/bash
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
-#SBATCH --partition=cpu
-#SBATCH --account=begd-dtai-gh
 #SBATCH --job-name=GWDownload
-#SBATCH --time=02:00:00
-#SBATCH --constraint="projects"
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --time=04:00:00
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
 
-module load python
-module load python/miniforge3_pytorch/2.5.0
-module load cray-hdf5/1.14.3.7
+set -euo pipefail
+mkdir -p logs
 
-module list
+# Submit this script from the repository root:
+#   sbatch scripts/submit_download.slurm
 
-cd "$SLURM_SUBMIT_DIR"
+# ===== EDIT THESE =====
+NOISE_DIR="/path/to/noise_dir"
 
-srun $(which python) downloader.py \
-    --gps_start 1248652818 \
-    --gps_end 1249862418 \
-    --sample_rate 4096 \
-    --window_len_s 4096 \
-    --mode noise \
-    --require_full_window \
-    --n_segments 5 \
-    --output_dir "/projects/begd/victoria/AttenGW/noise/jun2019/" \
-    --plot_timeline \
-    --plot_timeseries \
-    --plot_psd \
-    --glitch_sigma 3.0 \
-    --glitch_max_frac 0.005 \
-    --max_std_ratio 5.0
-#add this flag to produce pre-whitened noise segments
-   #--whiten \
+GPS_START=1248652818
+GPS_END=1249862418
+WINDOW_LEN_S=4096
+N_SEGMENTS=5
+MODE="noise"   # options: noise, signal, both
+
+# ===== SHARED PHYSICAL/DATA SETTINGS =====
+# These should match the training/dataloader settings.
+SAMPLE_RATE=4096
+BAND_LOW=25.0
+BAND_HIGH=450.0
+BANDPASS_ORDER=4
+PSD_SEGLEN_S=4.0
+TARGET_PLOT_FS=1024.0
+
+# ===== OPTIONAL CLEANING / QC SETTINGS =====
+GLITCH_SIGMA=3.0
+GLITCH_MAX_FRAC=0.005
+MAX_STD_RATIO=5.0
+
+srun python -u downloader.py \
+  --gps_start "${GPS_START}" \
+  --gps_end "${GPS_END}" \
+  --sample_rate "${SAMPLE_RATE}" \
+  --window_len_s "${WINDOW_LEN_S}" \
+  --mode "${MODE}" \
+  --require_full_window \
+  --n_segments "${N_SEGMENTS}" \
+  --output_dir "${NOISE_DIR}" \
+  --band_low "${BAND_LOW}" \
+  --band_high "${BAND_HIGH}" \
+  --bandpass_order "${BANDPASS_ORDER}" \
+  --psd_seglen_s "${PSD_SEGLEN_S}" \
+  --target_plot_fs "${TARGET_PLOT_FS}" \
+  --plot_timeline \
+  --plot_timeseries \
+  --plot_psd \
+  --glitch_sigma "${GLITCH_SIGMA}" \
+  --glitch_max_frac "${GLITCH_MAX_FRAC}" \
+  --max_std_ratio "${MAX_STD_RATIO}"
+# If you want to save already-whitened noise files, add:
+#   --whiten
+# Training should then use:
+#   --noise_is_whitened
