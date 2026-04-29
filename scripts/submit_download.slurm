@@ -31,3 +31,5 @@ srun $(which python) downloader.py \
     --glitch_sigma 3.0 \
     --glitch_max_frac 0.005 \
     --max_std_ratio 5.0
+#add this flag to produce pre-whitened noise segments
+   #--whiten \
