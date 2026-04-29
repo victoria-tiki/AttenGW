@@ -91,25 +91,27 @@ class full_module(nn.Module):
         self.dim = 16
         self.node_dim = 64
         
-        self.conv1d=nn.Conv1d(self.dim,1, 1) #change to dim for attn, node_dim for graph
+        self.conv1d=nn.Conv1d(self.dim,1, 1) 
         self.atten_A=Attn(self.dim,self.node_dim)
         self.atten_B=Attn(self.dim,self.node_dim)
 
     def forward(self, x):
-        x_A = x[:, :, 0].view(-1, 4096, 1).permute(0,2,1)
-        x_B = x[:, :, 1].view(-1, 4096, 1).permute(0,2,1)
-        #x_C = x[:, :, 2].view(-1, 4096, 1).permute(0,2,1)
-        
+        seq_len = x.shape[1]
+
+        x_A = x[:, :, 0].view(-1, seq_len, 1).permute(0, 2, 1)
+        x_B = x[:, :, 1].view(-1, seq_len, 1).permute(0, 2, 1)
+
         x_A = self.sub_mod_A(x_A)
         x_B = self.sub_mod_B(x_B)
 
-        updated_x_A = self.atten_A(x_A, x_B).permute(0,2,1).view(-1, 4096, self.dim, 1) #change to dim for attn, node_dim for graph
-        updated_x_B = self.atten_B(x_B, x_A).permute(0,2,1).view(-1, 4096, self.dim, 1)#change to dim for attn, node_dim for graph
+        updated_x_A = self.atten_A(x_A, x_B).permute(0, 2, 1).view(-1, seq_len, self.dim, 1)
+        updated_x_B = self.atten_B(x_B, x_A).permute(0, 2, 1).view(-1, seq_len, self.dim, 1)
 
         out = torch.cat([updated_x_A, updated_x_B], dim=-1)
-        out = torch.max(out, dim=-1).values#[0]
+        out = torch.max(out, dim=-1).values
 
-        out = self.conv1d(out.permute(0,2,1)).permute(0,2,1)
-        out = F.sigmoid(out)
+        out = self.conv1d(out.permute(0, 2, 1)).permute(0, 2, 1)
+        out = torch.sigmoid(out)
 
         return out
+
