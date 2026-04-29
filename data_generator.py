@@ -247,25 +247,6 @@ class GWDataset(Dataset):
         num_samples = grp["H1_wave"].shape[0]  # (N, 8192)
         self.indices = [(0, i) for i in range(num_samples)]
 
-        # ============================================================
-        # LEGACY (multi-file mydata*.hdf5) 
-        # ============================================================
-        # self.data_files = sorted(glob.glob(f"{data_dir}/mydata*.hdf5"))
-        # self.file_handlers = [h5py.File(f, 'r') for f in self.data_files]
-        #
-        # all_indices = []
-        # for file_idx, f in enumerate(self.file_handlers):
-        #     num_samples = f['data'].shape[0]   # (N, 2, 16384)
-        #     all_indices.extend([(file_idx, i) for i in range(num_samples)])
-        #
-        # rng = np.random.RandomState(42)
-        # rng.shuffle(all_indices)
-        # cutoff = int(split_ratio * len(all_indices))
-        # if train:
-        #     self.indices = all_indices[:cutoff]
-        # else:
-        #     self.indices = all_indices[cutoff:]
-        # ============================================================
 
         self.gaussian = gaussian
         if gaussian:
@@ -956,26 +937,36 @@ class WaveformDataModule(LightningDataModule):
             )
 
 
-
-        
     def train_dataloader(self):
-        sampler = DistributedSampler(self.train_dataset, shuffle=self.shuffle)
+        
+        use_distributed = (torch.distributed.is_available() and torch.distributed.is_initialized())
+
+        sampler = DistributedSampler(self.train_dataset, shuffle=self.shuffle) if use_distributed else None
 
         return DataLoader(
             self.train_dataset,
-            batch_size  = self.batch_size,
-            sampler     = sampler,
-            shuffle     = False,
-            num_workers = self.num_workers,
-            pin_memory  = True
+            batch_size=self.batch_size,
+            sampler=sampler,
+            shuffle=(self.shuffle if sampler is None else False),
+            num_workers=self.num_workers,
+            pin_memory=True,
         )
 
-        
-    
     def val_dataloader(self):
-        sampler = DistributedSampler(self.val_dataset, shuffle=False)
-        return DataLoader(self.val_dataset, batch_size=self.batch_size,
-                          sampler=sampler, num_workers=self.num_workers, pin_memory=True)
+        
+        use_distributed = (torch.distributed.is_available() and torch.distributed.is_initialized())
+
+        sampler = DistributedSampler(self.val_dataset, shuffle=False) if use_distributed else None
+
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            sampler=sampler,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
+        
 
 
     def increment_epoch(self):
