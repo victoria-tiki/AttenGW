@@ -28,6 +28,7 @@ NOISE_PROB=0.60
 P_HIGHER_INIT=0.9
 P_HIGHER_FIN=0.25
 SEGMENT_LENGTH=4096
+EDGE_BUFFER=2048
 DIM=1024
 
 srun python -u train.py \
@@ -44,6 +45,7 @@ srun python -u train.py \
   --p_higher_init "${P_HIGHER_INIT}" \
   --p_higher_fin "${P_HIGHER_FIN}" \
   --segment_length "${SEGMENT_LENGTH}" \
+  --edge_buffer "${EDGE_BUFFER}" \
   --dim "${DIM}"
 # If your noise files are already whitened, add:
 # --noise_is_whitened
