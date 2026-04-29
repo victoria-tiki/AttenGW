@@ -307,18 +307,21 @@ def main():
     #----- set up training -----
     print('setting up trainer')
     devices = torch.cuda.device_count()
-    devices = devices if devices != 0 else 1
-
+    accelerator = "gpu" if devices > 0 else "cpu"
+    devices = devices if devices > 0 else 1
+    strategy = "ddp" if accelerator == "gpu" and (devices > 1 or args.num_nodes > 1) else "auto"
+    
     trainer = Trainer(
         max_epochs=100,
         num_nodes=args.num_nodes,
         devices=devices,
-        accelerator="gpu",
-        strategy="ddp",
+        accelerator=accelerator,
+        strategy=strategy,
         enable_progress_bar=True,
         enable_model_summary=True,
         callbacks=callbacks,
     )
+
 
     model = LightningModel(lr=args.lr_init, internal_epoch=args.initial_epoch)
 
