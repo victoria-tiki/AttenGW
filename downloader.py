@@ -1,4 +1,3 @@
-
 import argparse
 import numpy as np
 from gwosc.datasets import query_events, event_gps
@@ -35,6 +34,16 @@ def parse_args():
                         help="Padding around each known event to exclude (noise mode)")
     parser.add_argument("--require_full_window", action="store_true",
                         help="If set, only select windows that are full length (= window_len_s).")
+    parser.add_argument("--band_low", type=float, default=25.0,
+                    help="Low-frequency cutoff used for QC bandpass and plots.")
+    parser.add_argument("--band_high", type=float, default=450.0,
+                        help="High-frequency cutoff used for QC bandpass and plots.")
+    parser.add_argument("--bandpass_order", type=int, default=4,
+                        help="Butterworth bandpass filter order.")
+    parser.add_argument("--psd_seglen_s", type=float, default=4.0,
+                        help="Welch PSD segment length in seconds.")
+    parser.add_argument("--target_plot_fs", type=float, default=1024.0,
+                        help="Target sample rate for diagnostic time-series plots.")
 
     # basic scalar cuts on raw / de-glitched strain
     parser.add_argument("--amp_thresh", type=float, default=None,
@@ -380,11 +389,13 @@ def download_and_save_window(
     amp_thresh=None, rms_thresh=None, whiten=False,
     glitch_sigma=None, glitch_max_frac=0.01,
     max_raw_std=None, min_raw_std=None, max_std_ratio=None,
+    band_low=25.0, band_high=450.0, bandpass_order=4,
+    psd_seglen_s=4.0,
 ):
     """
     Download H1/L1 for [start, end), optionally apply:
       - glitch clamping in full band (raw domain),
-      - QC cuts (amp, RMS, std, std-ratio) on a 25–450 Hz bandpassed copy,
+      - QC cuts (amp, RMS, std, std-ratio) on a bandpassed copy,
       - whitening using PSD from the cleaned full-band strain.
 
     Saved HDF5 contains:
@@ -392,7 +403,7 @@ def download_and_save_window(
       psd_H1, psd_L1        (PSD estimated from cleaned full-band strain)
       freqs                 (frequency grid for the PSD)
 
-    Attributes: gps_start, gps_end, mode, whiten.
+    Attributes: gps_start, gps_end, mode, whiten, sample_rate, band_low, band_high, bandpass_order, psd_seglen_s.
 
     Returns
     -------
@@ -442,6 +453,9 @@ def download_and_save_window(
                 fs=sample_rate,
                 sigma=glitch_sigma,
                 max_frac=glitch_max_frac,
+                low=band_low,
+                high=band_high,
+                order=bandpass_order,
             )
             if too_many:
                 reject_reasons.append(
@@ -454,9 +468,15 @@ def download_and_save_window(
         if not good:
             continue
 
-        # --- make a bandpassed copy for QC (25–450 Hz) ---
+        # --- make a bandpassed copy for QC  ---
         try:
-            vals_qc = bandpass_for_qc(vals, sample_rate, low=25.0, high=450.0, order=4)
+            vals_qc = bandpass_for_qc(
+                vals,
+                sample_rate,
+                low=band_low,
+                high=band_high,
+                order=bandpass_order,
+            )
         except Exception as e:
             reject_reasons.append(f"{ifo}: bandpass_for_qc failed: {e}")
             good = False
@@ -486,7 +506,7 @@ def download_and_save_window(
             continue
 
         # --- PSD from cleaned full-band strain (vals) ---
-        freqs_psd, Pxx = estimate_psd(vals, fs=sample_rate)
+        freqs_psd, Pxx = estimate_psd(vals, fs=sample_rate, seglen_s=psd_seglen_s)
 
         # --- whiten or keep raw ---
         if whiten:
@@ -557,6 +577,11 @@ def download_and_save_window(
         f.attrs["gps_end"]   = end
         f.attrs["mode"]      = mode
         f.attrs["whiten"]    = bool(whiten)
+        f.attrs["sample_rate"] = sample_rate
+        f.attrs["band_low"] = band_low
+        f.attrs["band_high"] = band_high
+        f.attrs["bandpass_order"] = bandpass_order
+        f.attrs["psd_seglen_s"] = psd_seglen_s
 
     std_log = ", ".join(
         f"{ifo}:qc_std={per_ifo_std.get(ifo, np.nan):.3e}" for ifo in ifo_list
@@ -738,6 +763,10 @@ def main():
                 max_raw_std=args.max_raw_std,
                 min_raw_std=args.min_raw_std,
                 max_std_ratio=args.max_std_ratio,
+                band_low=args.band_low,
+                band_high=args.band_high,
+                bandpass_order=args.bandpass_order,
+                psd_seglen_s=args.psd_seglen_s,
             )
             if downloaded:
                 noise_windows.append((s, e))
@@ -768,6 +797,10 @@ def main():
                 max_raw_std=None,
                 min_raw_std=None,
                 max_std_ratio=None,
+                band_low=args.band_low,
+                band_high=args.band_high,
+                bandpass_order=args.bandpass_order,
+                psd_seglen_s=args.psd_seglen_s,
             )
             if downloaded:
                 signal_windows.append((s, e))
@@ -787,14 +820,18 @@ def main():
 
     if getattr(args, "plot_timeseries", False):
 
-        target_fs_plot = 1024.0
+        target_fs_plot = args.target_plot_fs
         ds_factor = max(1, int(args.sample_rate // target_fs_plot))
         fs_plot = args.sample_rate / ds_factor
 
-        lowcut, highcut = 25.0, 450.0
+        lowcut, highcut = args.band_low, args.band_high
         nyq_plot = 0.5 * fs_plot
-        b_plot, a_plot = butter(4, [lowcut / nyq_plot, highcut / nyq_plot], btype="band")
-
+        b_plot, a_plot = butter(
+            args.bandpass_order,
+            [lowcut / nyq_plot, highcut / nyq_plot],
+            btype="band",
+        )
+        
         whiten_label = "white" if args.whiten else "raw"
 
         if noise_windows:
@@ -822,17 +859,19 @@ def main():
                 l1_std = np.std(l1_bp)
                 ylim_H1 = 6.0 * h1_std
                 ylim_L1 = 6.0 * l1_std
+                
+                label=f"{lowcut:g}–{highcut:g} Hz bp"
 
                 fig, (ax1, ax2) = plt.subplots(
                     2, 1, sharex=True, figsize=(8, 5), constrained_layout=True
                 )
-                ax1.plot(t, h1_bp, label="25–450 Hz bp", alpha=0.6)
+                ax1.plot(t, h1_bp, label=label, alpha=0.6)
                 ax1.set_ylabel("strain (H1)")
                 ax1.set_title(f"Noise window starting at GPS {s} ({whiten_label})")
                 ax1.set_ylim(-ylim_H1, ylim_H1)
                 ax1.legend(loc="upper right")
 
-                ax2.plot(t, l1_bp, label="25–450 Hz bp", alpha=0.6)
+                ax2.plot(t, l1_bp, label=label, alpha=0.6)
                 ax2.set_xlabel("time [s] from window start")
                 ax2.set_ylabel("strain (L1)")
                 ax2.set_ylim(-ylim_L1, ylim_L1)
@@ -872,17 +911,19 @@ def main():
                 l1_std = np.std(l1_bp)
                 ylim_H1 = 6.0 * h1_std
                 ylim_L1 = 6.0 * l1_std
+                
+                label=f"{lowcut:g}–{highcut:g} Hz bp"
 
                 fig, (ax1, ax2) = plt.subplots(
                     2, 1, sharex=True, figsize=(8, 5), constrained_layout=True
                 )
-                ax1.plot(t, h1_bp, label="25–450 Hz bp", alpha=0.6)
+                ax1.plot(t, h1_bp, label=label, alpha=0.6)
                 ax1.set_ylabel("strain (H1)")
                 ax1.set_title(f"Signal window starting at GPS {s} ({whiten_label})")
                 ax1.set_ylim(-ylim_H1, ylim_H1)
                 ax1.legend(loc="upper right")
 
-                ax2.plot(t, l1_bp, label="25–450 Hz bp", alpha=0.6)
+                ax2.plot(t, l1_bp, label=label, alpha=0.6)
                 ax2.set_xlabel("time [s] from window start")
                 ax2.set_ylabel("strain (L1)")
                 ax2.set_ylim(-ylim_L1, ylim_L1)
@@ -908,24 +949,5 @@ def main():
 
 
 if __name__ == "__main__":
-
-    sys.argv = [
-        "scriptname",
-        "--gps_start", "1248652818",
-        "--gps_end",   "1249862418",
-        "--window_len_s", "4096",
-        "--mode", "noise",
-        "--require_full_window",
-        "--plot_timeline",
-        "--n_segments", "5",
-        "--plot_timeseries",
-        "--plot_psd",
-        # aggressive-ish defaults; tune as needed
-        "--glitch_sigma", "3.0",
-        "--glitch_max_frac", "0.005",
-        "--max_std_ratio", "5.0",
-        #"--max_raw_std", "3e-22"
-        # "--whiten",
-    ]
     main()
 
