@@ -83,14 +83,7 @@ See [`docs/config.md`](docs/config.md) for the main configuration options.
 
 ## Download real detector noise
 
-For the recommended raw-noise workflow, keep:
-
-```yaml
-shared:
-  noise_is_whitened: false
-```
-
-Then run:
+To download real detector noise (or, optionally, real signals to be used for inference) run:
 
 ```bash
 python downloader.py --config configs/example.yaml
