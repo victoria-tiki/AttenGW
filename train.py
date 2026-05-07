@@ -9,6 +9,7 @@ import cProfile
 import math
 
 import h5py
+import yaml
 import glob
 import scipy.interpolate
 
@@ -115,91 +116,150 @@ def get_rank() -> int:
     """Best-effort rank detection for SLURM/DDP; defaults to 0."""
     return int(os.environ.get("LOCAL_RANK", os.environ.get("SLURM_PROCID", 0)))
 
+def load_train_config(config_path):
+    """Load training defaults from YAML config."""
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
 
+    shared = cfg["shared"]
+    paths = cfg["paths"]
+    training = cfg["training"]
+
+    defaults = {
+        # paths
+        "data_dir": paths["data_dir"],
+        "noise_dir": paths["noise_dir"],
+        "checkpoint_dir": paths["checkpoint_dir"],
+
+        # files
+        "train_file": training["train_file"],
+        "val_file": training["val_file"],
+
+        # training
+        "batch_size": training["batch_size"],
+        "num_workers": training["num_workers"],
+        "lr_init": training["lr_init"],
+
+        # data generation
+        "dim": training["dim"],
+        "segment_length": training["segment_length"],
+        "edge_buffer": training["edge_buffer"],
+        "noise_prob": training["noise_prob"],
+        "p_higher_init": training["p_higher_init"],
+        "p_higher_fin": training["p_higher_fin"],
+
+        # shared preprocessing
+        "sample_rate": shared["sample_rate"],
+        "band_low": shared["band_low"],
+        "band_high": shared["band_high"],
+        "bandpass_order": shared["bandpass_order"],
+        "psd_floor": shared["psd_floor"],
+        "psd_outband": shared["psd_outband"],
+
+        # dataloader mode
+        "noise_is_whitened": bool(shared["noise_is_whitened"]),
+    }
+
+    return defaults
+    
+    
 def run_early_diagnostics(args, rank: int) -> None:
     """
     Early-run diagnostics:
     - raw strain amplitude stats
-    - SNR stats
+    - matched-filter SNR stats
+
+    This reads validation samples lazily from HDF5 instead of loading the
+    full validation file into memory.
     """
     if rank != 0:
         return
 
-    data_dir = args.data_dir
     val_path = os.path.join(args.data_dir, args.val_file)
 
     with h5py.File(val_path, "r") as f:
         grp = f["data"]
-        H = grp["H1_wave"][()]
-        L = grp["L1_wave"][()]
+        H_ds = grp["H1_wave"]
+        L_ds = grp["L1_wave"]
 
-    # ---------- amplitude stats ----------
-    n_samples = min(5000, H.shape[0])
-    peak_amps = np.zeros((n_samples,))
+        n_total = H_ds.shape[0]
 
-    for i in range(n_samples):
-        h1 = H[i]
-        l1 = L[i]
-        peak_amps[i] = max(np.max(np.abs(l1)), np.max(np.abs(h1)))
+        # ---------- amplitude stats ----------
+        n_samples = min(5000, n_total)
+        amp_indices = np.linspace(0, n_total - 1, n_samples, dtype=int)
 
-    print(f"\n Raw strain amplitude stats over {n_samples} samples:")
-    print(f"  Min:    {np.min(peak_amps):.4e}")
-    print(f"  Max:    {np.max(peak_amps):.4e}")
-    print(f"  Median: {np.median(peak_amps):.4e}")
-    print(f"  Mean:   {np.mean(peak_amps):.4e}")
-    print(f"  Std:    {np.std(peak_amps):.4e}")
+        peak_amps = np.zeros((n_samples,), dtype=np.float64)
 
-    # ===================== SNR STATS  =====================
-    
-    fs = 4096.0
-    dt = 1.0 / fs
-    
-    noise_dir = args.noise_dir
-    noise_files = sorted(glob.glob(os.path.join(noise_dir, "*.hdf5")))
-    
-    if len(noise_files) == 0:
-        print(f"\nNo noise HDF5 files found in {noise_dir}, skipping SNR stats.")
-    else:
+        for j, i in enumerate(amp_indices):
+            h1 = H_ds[i]
+            l1 = L_ds[i]
+            peak_amps[j] = max(np.max(np.abs(l1)), np.max(np.abs(h1)))
+
+        print(f"\nRaw strain amplitude stats over {n_samples} validation samples:")
+        print(f"  Min:    {np.min(peak_amps):.4e}")
+        print(f"  Max:    {np.max(peak_amps):.4e}")
+        print(f"  Median: {np.median(peak_amps):.4e}")
+        print(f"  Mean:   {np.mean(peak_amps):.4e}")
+        print(f"  Std:    {np.std(peak_amps):.4e}")
+
+        # ===================== SNR STATS =====================
+
+        fs = float(args.sample_rate)
+        dt = 1.0 / fs
+
+        noise_files = sorted(glob.glob(os.path.join(args.noise_dir, "*.hdf5")))
+
+        if len(noise_files) == 0:
+            print(f"\nNo noise HDF5 files found in {args.noise_dir}, skipping SNR stats.")
+            return
+
         noise_path = noise_files[0]
+
         with h5py.File(noise_path, "r") as nf:
             has_psd = ("psd_L1" in nf) and ("psd_H1" in nf) and ("freqs" in nf)
+
             if not has_psd:
-                print(f"\nNoise file {noise_path} is missing 'psd_L1', 'psd_H1', or 'freqs'; skipping SNR stats.")
-            else:
-                freqs = np.asarray(nf["freqs"][()]).squeeze()
-                psd_L_arr = np.asarray(nf["psd_L1"][()]).squeeze()
-                psd_H_arr = np.asarray(nf["psd_H1"][()]).squeeze()
-    
-                psd_L = scipy.interpolate.interp1d(
-                    freqs, psd_L_arr,
-                    bounds_error=False,
-                    fill_value=(psd_L_arr[0], psd_L_arr[-1])
+                print(
+                    f"\nNoise file {noise_path} is missing 'psd_L1', "
+                    "'psd_H1', or 'freqs'; skipping SNR stats."
                 )
-                psd_H = scipy.interpolate.interp1d(
-                    freqs, psd_H_arr,
-                    bounds_error=False,
-                    fill_value=(psd_H_arr[0], psd_H_arr[-1])
-                )
-    
-                n_snr = min(2000, H.shape[0])
-                snrs = np.zeros((n_snr,), dtype=np.float64)
-    
-                for i in range(n_snr):
-                    h1 = H[i]
-                    l1 = L[i]
-    
-                    snr_L = whiten.matched_filter_snr(l1, psd_L, dt=dt)
-                    snr_H = whiten.matched_filter_snr(h1, psd_H, dt=dt)
-                    snrs[i] =  np.sqrt(snr_L**2 + snr_H**2)
-    
-                print(f"\nMatched-filter SNR stats over {n_snr} validation signals:")
-                print(f"  Min SNR:    {np.min(snrs):.3f}")
-                print(f"  Max SNR:    {np.max(snrs):.3f}")
-                print(f"  Median SNR: {np.median(snrs):.3f}")
-                print(f"  Mean SNR:   {np.mean(snrs):.3f}")
-                print(f"  Std SNR:    {np.std(snrs):.3f}")
+                return
 
+            freqs = np.asarray(nf["freqs"][()]).squeeze()
+            psd_L_arr = np.asarray(nf["psd_L1"][()]).squeeze()
+            psd_H_arr = np.asarray(nf["psd_H1"][()]).squeeze()
 
+            psd_L = scipy.interpolate.interp1d(
+                freqs,
+                psd_L_arr,
+                bounds_error=False,
+                fill_value=(psd_L_arr[0], psd_L_arr[-1]),
+            )
+            psd_H = scipy.interpolate.interp1d(
+                freqs,
+                psd_H_arr,
+                bounds_error=False,
+                fill_value=(psd_H_arr[0], psd_H_arr[-1]),
+            )
+
+        n_snr = min(2000, n_total)
+        snr_indices = np.linspace(0, n_total - 1, n_snr, dtype=int)
+        snrs = np.zeros((n_snr,), dtype=np.float64)
+
+        for j, i in enumerate(snr_indices):
+            h1 = H_ds[i]
+            l1 = L_ds[i]
+
+            snr_L = whiten.matched_filter_snr(l1, psd_L, dt=dt)
+            snr_H = whiten.matched_filter_snr(h1, psd_H, dt=dt)
+            snrs[j] = np.sqrt(snr_L**2 + snr_H**2)
+
+        print(f"\nMatched-filter SNR stats over {n_snr} validation samples:")
+        print(f"  Min SNR:    {np.min(snrs):.3f}")
+        print(f"  Max SNR:    {np.max(snrs):.3f}")
+        print(f"  Median SNR: {np.median(snrs):.3f}")
+        print(f"  Mean SNR:   {np.mean(snrs):.3f}")
+        print(f"  Std SNR:    {np.std(snrs):.3f}")
 
 def plot_samples(args, rank: int) -> None:
     """Plot a batch of examples."""
@@ -226,6 +286,12 @@ def plot_samples(args, rank: int) -> None:
         train_file=args.train_file,
         val_file=args.val_file,
         noise_is_whitened=args.noise_is_whitened,
+        sample_rate=args.sample_rate,
+        band_low=args.band_low,
+        band_high=args.band_high,
+        bandpass_order=args.bandpass_order,
+        psd_floor=args.psd_floor,
+        psd_outband=args.psd_outband,
     )
 
 
@@ -256,12 +322,18 @@ def plot_samples(args, rank: int) -> None:
     
     
 def main():
-    parser = argparse.ArgumentParser(description="gw detection")
-
+    
+    #### Parse parameters from config or command line ######################
+    
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=str, default=None, help="Optional YAML config file.")
+    pre_args, remaining_argv = pre_parser.parse_known_args()
+    parser = argparse.ArgumentParser(description="gw detection", parents=[pre_parser])
+    
     # Paths (must be set by user, no defaults)
-    parser.add_argument('--data_dir', required=True, help='Directory containing the injection HDF5 files')
-    parser.add_argument('--noise_dir', required=True, help='Directory containing the noise HDF5 files')
-    parser.add_argument('--checkpoint_dir', required=True, help='Output directory for checkpoints, logs, and plots')
+    parser.add_argument('--data_dir', default=None, help='Directory containing the injection HDF5 files')
+    parser.add_argument('--noise_dir', default=None, help='Directory containing the noise HDF5 files')
+    parser.add_argument('--checkpoint_dir', default=None, help='Output directory for checkpoints, logs, and plots')    
     
     # --- injection file names  ---
     parser.add_argument('--train_file', type=str, default='train.hdf', help='train injection file name inside data_dir')
@@ -281,16 +353,36 @@ def main():
     parser.add_argument('--segment_length', type=int, default=4096, help='segment length fed to the model')
     parser.add_argument('--dim', type=int, default=1024, help='how many samples before merger at labeled as belonging to the signal class')
     parser.add_argument('--edge_buffer', type=int, default=2048, help='Number of samples trimmed from each side after whitening/filtering to reduce edge artifacts.')
+    parser.add_argument('--sample_rate', type=int, default=4096, help='Sampling rate in Hz; should match the injection and noise files.')
+    parser.add_argument('--band_low', type=float, default=25.0, help='Low-frequency cutoff used in dataloader whitening/band-limiting.')
+    parser.add_argument('--band_high', type=float, default=450.0, help='High-frequency cutoff used in dataloader whitening/band-limiting.')
+    parser.add_argument('--bandpass_order', type=int, default=4, help='Butterworth bandpass filter order used in the dataloader.')
+    parser.add_argument('--psd_floor', type=float, default=1e-48, help='Minimum PSD value used for numerical stability.')
+    parser.add_argument('--psd_outband', type=float, default=1e40, help='Large PSD value used to suppress frequencies outside the target band.')
     
     # --- dataloader choice: old vs new (equivalent to whether noise is already whitened) ---
-    parser.add_argument('--noise_is_whitened', action='store_true',
-                        help='Use the OLD dataloader path (expects noise files to already be whitened). If unset, uses the NEW path (raw noise, whitened inside the generator).')
-                        
-    args = parser.parse_args()
+    parser.add_argument('--noise_is_whitened', action='store_true', help='Use the OLD dataloader path (expects noise files to already be whitened). If unset, uses the NEW path (raw noise, whitened inside the generator).')
+                            
+    if pre_args.config is not None:
+        parser.set_defaults(**load_train_config(pre_args.config))
     
+    args = parser.parse_args(remaining_argv)
+    args.config = pre_args.config
+    
+    missing = [name for name in ["data_dir", "noise_dir", "checkpoint_dir"] if getattr(args, name) is None]
+    if missing:
+        raise ValueError(
+            "Missing required argument(s): "
+            + ", ".join(f"--{name}" for name in missing)
+            + ". Provide them directly or use --config."
+        )    
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
+
+    #### Continue with train script ###################
+    
+    
     rank = get_rank()
 
     #----- callbacks --------
@@ -306,6 +398,7 @@ def main():
 
     #----- set up training -----
     print('setting up trainer')
+    
     devices = torch.cuda.device_count()
     accelerator = "gpu" if devices > 0 else "cpu"
     devices = devices if devices > 0 else 1
@@ -320,8 +413,9 @@ def main():
         enable_progress_bar=True,
         enable_model_summary=True,
         callbacks=callbacks,
+        #limit_train_batches=0.0001,
+        #limit_val_batches=0.0001,
     )
-
 
     model = LightningModel(lr=args.lr_init, internal_epoch=args.initial_epoch)
 
@@ -340,7 +434,13 @@ def main():
         train_file=args.train_file,
         val_file=args.val_file,
         noise_is_whitened=args.noise_is_whitened,
-    )
+        sample_rate=args.sample_rate,
+        band_low=args.band_low,
+        band_high=args.band_high,
+        bandpass_order=args.bandpass_order,
+        psd_floor=args.psd_floor,
+        psd_outband=args.psd_outband,
+    )    
 
     # Early-run diagnostics and plotting (rank 0 only)
     run_early_diagnostics(args, rank)
