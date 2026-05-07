@@ -1,4 +1,3 @@
-The scripts work as modular components, but containerization and documentation are still under active development.
 
 # AttenGW for Gravitational Wave Classification
 
@@ -76,13 +75,6 @@ python train.py --config configs/example.yaml --checkpoint_dir /tmp/attengw_trai
 
 After training, use the inference notebook to load a trained checkpoint and visualize predictions on selected examples.
 
----
-
-## 1  Model Variants
-| Name | Components | When to use |
-|------|------------|-------------|
-| **CNN + PinSage_Attn** (default) | 2-channel CNN front-end (processing Livingston and Hanford signals separately) → PinSage **attention-based** aggregator | Best overall; lets the network weight L1 vs H1 features dynamically, empirically found to reduce FPs|
-| **CNN + PinSage** | 2-channel CNN front-end → PinSage **graph** aggregator | For ablation or if you prefer deterministic pooling. |
 
 ---
 
