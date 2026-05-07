@@ -1,0 +1,12 @@
+numpy
+scipy
+h5py
+matplotlib
+torch
+torchvision
+pytorch-lightning
+gwosc
+gwpy
+astropy
+pyyaml
+tensorboard
