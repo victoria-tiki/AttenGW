@@ -10,53 +10,94 @@
 set -euo pipefail
 mkdir -p logs
 
-# Submit this script from the repository root:
+# Submit from the repository root:
 #   sbatch scripts/submit_download.slurm
 
-# ===== EDIT THESE =====
-NOISE_DIR="/path/to/noise_dir"
+CONFIG="configs/example.yaml"
+JOB_ID="${SLURM_JOB_ID:-manual_$(date +%Y%m%d_%H%M%S)}"
 
-GPS_START=1248652818
-GPS_END=1249862418
-WINDOW_LEN_S=4096
-N_SEGMENTS=5
-MODE="noise"   # options: noise, signal, both
+python -c "import yaml" 2>/dev/null || pip install --user pyyaml
 
-# ===== SHARED PHYSICAL/DATA SETTINGS =====
-# These should match the training/dataloader settings.
-SAMPLE_RATE=4096
-BAND_LOW=25.0
-BAND_HIGH=450.0
-BANDPASS_ORDER=4
-PSD_SEGLEN_S=4.0
-TARGET_PLOT_FS=1024.0
+# Read downloader output directory from config.
+NOISE_DIR=$(python - "$CONFIG" <<'PY'
+import sys, yaml
+cfg = yaml.safe_load(open(sys.argv[1]))
+print(cfg["paths"]["noise_dir"])
+PY
+)
+mkdir -p "$NOISE_DIR"
 
-# ===== OPTIONAL CLEANING / QC SETTINGS =====
-GLITCH_SIGMA=3.0
-GLITCH_MAX_FRAC=0.005
-MAX_STD_RATIO=5.0
+# Build downloader.py CLI args from config.
+ARGS=$(python - "$CONFIG" <<'PY'
+import sys, shlex, yaml
+cfg = yaml.safe_load(open(sys.argv[1]))
+s, p, d = cfg["shared"], cfg["paths"], cfg["download"]
 
-srun python -u downloader.py \
-  --gps_start "${GPS_START}" \
-  --gps_end "${GPS_END}" \
-  --sample_rate "${SAMPLE_RATE}" \
-  --window_len_s "${WINDOW_LEN_S}" \
-  --mode "${MODE}" \
-  --require_full_window \
-  --n_segments "${N_SEGMENTS}" \
-  --output_dir "${NOISE_DIR}" \
-  --band_low "${BAND_LOW}" \
-  --band_high "${BAND_HIGH}" \
-  --bandpass_order "${BANDPASS_ORDER}" \
-  --psd_seglen_s "${PSD_SEGLEN_S}" \
-  --target_plot_fs "${TARGET_PLOT_FS}" \
-  --plot_timeline \
-  --plot_timeseries \
-  --plot_psd \
-  --glitch_sigma "${GLITCH_SIGMA}" \
-  --glitch_max_frac "${GLITCH_MAX_FRAC}" \
-  --max_std_ratio "${MAX_STD_RATIO}"
-# If you want to save already-whitened noise files, add:
-#   --whiten
-# Training should then use:
-#   --noise_is_whitened
+pairs = [
+    ("gps_start", d["gps_start"]),
+    ("gps_end", d["gps_end"]),
+    ("sample_rate", s["sample_rate"]),
+    ("window_len_s", d["window_len_s"]),
+    ("mode", d["mode"]),
+    ("n_segments", d["n_segments"]),
+    ("output_dir", p["noise_dir"]),
+    ("band_low", s["band_low"]),
+    ("band_high", s["band_high"]),
+    ("bandpass_order", s["bandpass_order"]),
+    ("psd_seglen_s", d["psd_seglen_s"]),
+    ("target_plot_fs", d["target_plot_fs"]),
+    ("event_pad_s", d["event_pad_s"]),
+    ("glitch_sigma", d["glitch_sigma"]),
+    ("glitch_max_frac", d["glitch_max_frac"]),
+    ("max_std_ratio", d["max_std_ratio"]),
+]
+
+for key in ["amp_thresh", "rms_thresh", "max_raw_std", "min_raw_std"]:
+    if d.get(key) is not None:
+        pairs.append((key, d[key]))
+
+args = []
+for key, value in pairs:
+    args += [f"--{key}", str(value)]
+
+for key, flag in [
+    ("require_full_window", "--require_full_window"),
+    ("plot_timeline", "--plot_timeline"),
+    ("plot_timeseries", "--plot_timeseries"),
+    ("plot_psd", "--plot_psd"),
+]:
+    if d.get(key, False):
+        args.append(flag)
+
+if s.get("noise_is_whitened", False):
+    args.append("--whiten")
+
+print(" ".join(shlex.quote(a) for a in args))
+PY
+)
+
+# Save provenance next to generated noise files.
+cp "$CONFIG" "$NOISE_DIR/config_download_job_${JOB_ID}.yaml"
+cat > "$NOISE_DIR/runinfo_download_job_${JOB_ID}.txt" <<EOF
+run_id: download_job_${JOB_ID}
+job_id: ${SLURM_JOB_ID:-unknown}
+job_name: ${SLURM_JOB_NAME:-unknown}
+submit_dir: ${SLURM_SUBMIT_DIR:-unknown}
+work_dir: $(pwd)
+hostname: $(hostname)
+date: $(date)
+nodes: ${SLURM_JOB_NUM_NODES:-unknown}
+node_list: ${SLURM_JOB_NODELIST:-unknown}
+cpus_per_task: ${SLURM_CPUS_PER_TASK:-unknown}
+gpus_per_node: ${SLURM_GPUS_PER_NODE:-unknown}
+partition: ${SLURM_JOB_PARTITION:-unknown}
+account: ${SLURM_JOB_ACCOUNT:-unknown}
+python: $(which python)
+config_source: ${CONFIG}
+command: python downloader.py ${ARGS}
+EOF
+
+echo "Running:"
+echo "python downloader.py $ARGS"
+
+srun python -u downloader.py $ARGS
