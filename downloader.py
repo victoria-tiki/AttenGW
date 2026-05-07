@@ -5,6 +5,7 @@ from gwosc.timeline import get_segments
 from gwpy.timeseries import TimeSeries
 import h5py
 import sys
+import yaml
 import gc
 import os
 import matplotlib.pyplot as plt
@@ -16,19 +17,22 @@ from scipy.ndimage import binary_dilation
 
 
 
-def parse_args():
+def parse_args(defaults=None, argv=None):
     parser = argparse.ArgumentParser(description="Download segments for GW ML dataset")
-    parser.add_argument("--gps_start", type=int, required=True,
+    
+    if defaults is None:
+        defaults = {}    
+    parser.add_argument("--gps_start", type=int, default=None,
                         help="GPS start time of overall interval")
-    parser.add_argument("--gps_end", type=int, required=True,
+    parser.add_argument("--gps_end", type=int, default=None,
                         help="GPS end time of overall interval")
     parser.add_argument("--sample_rate", type=int, default=4096,
                         help="Sampling rate (Hz)")
-    parser.add_argument("--window_len_s", type=float, required=True,
+    parser.add_argument("--window_len_s", type=float, default=None,
                         help="Length of each segment in seconds")
     parser.add_argument("--n_segments", type=int, default=None,
                         help="Number of segments to fetch (None = as many as possible)")
-    parser.add_argument("--mode", choices=["noise", "signal", "both"], required=True,
+    parser.add_argument("--mode", choices=["noise", "signal", "both"], default=None,
                         help="What kind of segments: noise only, signal only, or both")
     parser.add_argument("--event_pad_s", type=float, default=30.0,
                         help="Padding around each known event to exclude (noise mode)")
@@ -89,8 +93,55 @@ def parse_args():
     parser.add_argument("--whiten", action="store_true",
                         help="If set, whiten strain before saving (for both noise and signals).")
 
-    return parser.parse_args()
+    parser.set_defaults(**defaults)
+    return parser.parse_args(argv)
 
+
+def load_download_config(config_path):
+    """Load downloader defaults from YAML config."""
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
+
+    shared = cfg["shared"]
+    paths = cfg["paths"]
+    download = cfg["download"]
+
+    defaults = {
+        # output
+        "output_dir": paths["noise_dir"],
+
+        # shared preprocessing
+        "sample_rate": shared["sample_rate"],
+        "band_low": shared["band_low"],
+        "band_high": shared["band_high"],
+        "bandpass_order": shared["bandpass_order"],
+
+        # downloader settings
+        "gps_start": download["gps_start"],
+        "gps_end": download["gps_end"],
+        "window_len_s": download["window_len_s"],
+        "n_segments": download["n_segments"],
+        "mode": download["mode"],
+        "event_pad_s": download["event_pad_s"],
+        "require_full_window": bool(download["require_full_window"]),
+        "plot_timeline": bool(download["plot_timeline"]),
+        "plot_timeseries": bool(download["plot_timeseries"]),
+        "plot_psd": bool(download["plot_psd"]),
+        "target_plot_fs": download["target_plot_fs"],
+        "glitch_sigma": download["glitch_sigma"],
+        "glitch_max_frac": download["glitch_max_frac"],
+        "max_std_ratio": download["max_std_ratio"],
+        "psd_seglen_s": download["psd_seglen_s"],
+        "amp_thresh": download.get("amp_thresh"),
+        "rms_thresh": download.get("rms_thresh"),
+        "max_raw_std": download.get("max_raw_std"),
+        "min_raw_std": download.get("min_raw_std"),
+
+        # if training will use noise_is_whitened=True, downloader should save whitened strain
+        "whiten": bool(shared["noise_is_whitened"]),
+    }
+
+    return defaults
 
 def get_known_event_windows(gps_start, gps_end, pad_s):
     ev_list = query_events(select=[f"gps-time >= {gps_start}", f"gps-time <= {gps_end}"])
@@ -395,7 +446,7 @@ def download_and_save_window(
     """
     Download H1/L1 for [start, end), optionally apply:
       - glitch clamping in full band (raw domain),
-      - QC cuts (amp, RMS, std, std-ratio) on a bandpassed copy,
+      - QC cuts (amp, RMS, std, std-ratio) on a 25–450 Hz bandpassed copy,
       - whitening using PSD from the cleaned full-band strain.
 
     Saved HDF5 contains:
@@ -718,9 +769,43 @@ def plot_timeline_saved(gps_start, gps_end, saved_noise_windows, saved_signal_wi
 
 
 def main():
-    args = parse_args()
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=str, default=None,
+                            help="Optional YAML config file.")
+    pre_args, remaining_argv = pre_parser.parse_known_args()
+
+    if pre_args.config is not None:
+        defaults = load_download_config(pre_args.config)
+    else:
+        defaults = {}
+
+    args = parse_args(defaults=defaults, argv=remaining_argv)
+    args.config = pre_args.config
+    
+    missing = [
+        name for name in ["gps_start", "gps_end", "window_len_s", "mode", "output_dir"]
+        if getattr(args, name) is None
+    ]
+    if missing:
+        raise ValueError(
+            "Missing required argument(s): "
+            + ", ".join(f"--{name}" for name in missing)
+            + ". Provide them directly or use --config."
+        )
+
     ifos = ["H1", "L1"]
+    
     os.makedirs(args.output_dir, exist_ok=True)
+    
+    print("Starting downloader", flush=True)
+    print(f"Mode: {args.mode}", flush=True)
+    print(f"GPS range: {args.gps_start} to {args.gps_end}", flush=True)
+    print(f"Output directory: {args.output_dir}", flush=True)
+    print(f"Sample rate: {args.sample_rate} Hz", flush=True)
+    print(f"Window length: {args.window_len_s} s", flush=True)
+    print(f"Target segments: {args.n_segments if args.n_segments is not None else 'all available'}", flush=True)
+    print(f"Whiten before saving: {args.whiten}", flush=True)
+    print(f"Band/QC range: {args.band_low}–{args.band_high} Hz, order {args.bandpass_order}", flush=True)
 
     cleaned_intervals_for_plot = []
     noise_windows = []
@@ -733,8 +818,14 @@ def main():
         int_H1 = get_good_data_intervals("H1", args.gps_start, args.gps_end, args.dq_flags)
         int_L1 = get_good_data_intervals("L1", args.gps_start, args.gps_end, args.dq_flags)
         good_int = intersect_intervals(int_H1, int_L1)
+        
+        print(f"Found {len(int_H1)} H1 data intervals", flush=True)
+        print(f"Found {len(int_L1)} L1 data intervals", flush=True)
+        print(f"Found {len(good_int)} coincident H1/L1 intervals", flush=True)
 
         event_windows = get_known_event_windows(args.gps_start, args.gps_end, args.event_pad_s)
+        
+        print(f"Excluding {len(event_windows)} known event windows with ±{args.event_pad_s} s padding", flush=True)
 
         # Carve events out of the coincident intervals
         cleaned = subtract_event_windows(good_int, event_windows)
@@ -743,6 +834,8 @@ def main():
         noise_candidates = pick_windows_from_intervals(
             cleaned, args.window_len_s, require_full=args.require_full_window
         )
+        
+        print(f"Found {len(noise_candidates)} candidate noise windows before shuffling", flush=True)
 
         rng = np.random.default_rng()
         rng.shuffle(noise_candidates)
@@ -752,6 +845,13 @@ def main():
         for (s, e) in noise_candidates:
             if len(noise_windows) >= target:
                 break
+            
+            print(
+                f"Trying noise window {len(noise_windows) + 1}/{target}: "
+                f"{s:.1f}–{e:.1f}",
+                flush=True,
+            )
+
             downloaded = download_and_save_window(
                 ifos, s, e, args.sample_rate, mode="noise",
                 output_dir=args.output_dir,
@@ -780,12 +880,20 @@ def main():
             ws = t0 - args.window_len_s / 2
             we = ws + args.window_len_s
             signal_candidates.append((ws, we))
+        
+        print(f"Found {len(signal_candidates)} candidate signal windows", flush=True)
 
         if args.n_segments is not None:
             signal_candidates = signal_candidates[:args.n_segments]
 
         for (s, e) in signal_candidates:
             # by default, don't clamp glitches on signals
+            print(
+                f"Trying signal window {len(signal_windows) + 1}/{len(signal_candidates)}: "
+                f"{s:.1f}–{e:.1f}",
+                flush=True,
+            )
+
             downloaded = download_and_save_window(
                 ifos, s, e, args.sample_rate, mode="signal",
                 output_dir=args.output_dir,
@@ -945,6 +1053,10 @@ def main():
             plot_psd_examples(noise_windows, args.output_dir, args.whiten, mode="noise")
         if signal_windows:
             plot_psd_examples(signal_windows, args.output_dir, args.whiten, mode="signal")
+            
+    print("Downloader finished", flush=True)
+    print(f"Saved noise windows: {len(noise_windows)}", flush=True)
+    print(f"Saved signal windows: {len(signal_windows)}", flush=True)
 
 
 
