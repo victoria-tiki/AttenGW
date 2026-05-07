@@ -2,31 +2,79 @@ The scripts work as modular components, but containerization and documentation a
 
 # AttenGW for Gravitational Wave Classification
 
----
+This repository contains code for the attention-based gravitational-wave detection pipeline used in [arXiv:2512.12513](https://arxiv.org/abs/2512.12513). It includes scripts for preparing real LIGO noise, training the detector on waveform injections in detector noise, and running inference/visualization in a notebook.
 
-## 0  Introduction  
-This repository contains a **PyTorch / Lightning** re-implementation of the WaveNet-style classifier from *arXiv:2306.15728*, tailored for real LIGO data.  
-Key goals:
+## 0. Basic usage
 
-* **End-to-end training** on synthetic waveforms injected into true interferometer noise.  
-* Two interchangeable back-ends for multi-detector aggregation:  
-  **CNN + PinSage_Attn** (default, attention-weighted) and **CNN + PinSage** (graph-pooled).  
-* A **modern curriculum**: the new data-loader starts with louder injections, then *decays* toward the realistic SNR distribution for smoother convergence.  
-* Scripts for multi-GPU training, validation, and inference on unseen events.
+The basic workflow is:
 
+1. install the requirements,
+2. edit `configs/example.yaml` for data and training parameters,
+3. run the downloader,
+4. run training (using injection signals provided by the user),
+5. use the inference notebook to inspect predictions from a trained checkpoint.
 
-### Installation and Usage
-To get started with this project, clone the repository and install the required dependencies:
+### Installation
+
+Python 3.10 or newer is recommended.
+
+```bash
+python3.11 -m venv .venv_attengw
+source .venv_attengw/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
 ```
-git clone https://github.com/victoria-tiki/Wavenet_torch.git
-cd Wavenet_torch
-```
-This project includes slurm scripts for use in high-performance computing environments. To train the model, execute:
-```
-sbatch slurm_train.sh
+
+Tested with:
+
+```text
+Python 3.11.13
+PyTorch 2.11.0+cu130
+PyTorch Lightning 2.6.1
 ```
 
-The remainder of the README explains how the data are generated, which hyper-parameters matter most, and how to tweak them without falling into the data-leakage trap.
+### Configuration
+
+Edit data and training parameters in:
+
+```bash
+configs/example.yaml
+```
+
+At minimum, set the input/output paths and filenames before running the downloader or training scripts. See below for an outline of what parameters to change and when.
+
+### Downloading real noise and signal data
+
+The downloader is lightweight enough to run locally, in Colab, or on a CPU/login node. Local usage is usually recommended for this step.
+
+```bash
+python downloader.py --config configs/example.yaml
+```
+
+Optional SLURM usage:
+
+```bash
+sbatch scripts/submit_download.slurm
+```
+
+### Training
+
+Training is much faster on a GPU. For full training runs, the SLURM submission script is recommended.
+
+```bash
+sbatch scripts/submit_train.slurm
+```
+
+For a small local smoke test:
+
+```bash
+python train.py --config configs/example.yaml --checkpoint_dir /tmp/attengw_train_test --batch_size 2 --num_workers 0
+```
+
+
+### Inference
+
+After training, use the inference notebook to load a trained checkpoint and visualize predictions on selected examples.
 
 ---
 
