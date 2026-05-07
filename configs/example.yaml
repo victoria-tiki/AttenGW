@@ -1,0 +1,85 @@
+# AttenGW example configuration
+# This file is used by both submit_download.slurm and submit.slurm.
+
+shared:
+  # Must match between downloaded noise files and training.
+  sample_rate: 4096
+  noise_is_whitened: false
+
+  # Change only if you know noise psd properties to match.
+  band_low: 25.0
+  band_high: 450.0
+  bandpass_order: 4
+  psd_floor: 1.0e-48
+  psd_outband: 1.0e40
+
+
+paths:
+  # Edit these for your system.
+
+  # data_dir should contain the injection files listed under training.train_file
+  # and training.val_file. Each file should have:
+  #
+  #   /data/H1_wave   shape: (N, waveform_length)
+  #   /data/L1_wave   shape: (N, waveform_length)
+  #
+  # noise_dir should contain downloaded noise files with:
+  #
+  #   /strain_H1
+  #   /strain_L1
+  #   /psd_H1
+  #   /psd_L1
+  #   /freqs
+  # The downloader creates this with the correct structure automatically
+  
+  data_dir: /path/to/train_test_hdf_dir
+  noise_dir: /path/to/noise_dir
+  checkpoint_dir: /path/to/checkpoints_dir
+
+
+download:
+  # Commonly changed.
+  gps_start: 1248652818
+  gps_end: 1249862418
+  window_len_s: 4096
+  n_segments: 5
+  mode: noise               # options: noise, signal, both
+  require_full_window: true
+
+  # Optional diagnostic outputs.
+  plot_timeline: true
+  plot_timeseries: true
+  plot_psd: true
+  target_plot_fs: 1024.0
+
+  # Advanced cleaning/QC settings.
+  event_pad_s: 30.0
+  glitch_sigma: 5.0
+  glitch_max_frac: 0.01
+  max_std_ratio: 10.0
+  psd_seglen_s: 4.0
+
+  # Optional extra QC thresholds. Leave blank to disable.
+  amp_thresh:
+  rms_thresh:
+  max_raw_std:
+  min_raw_std:
+
+
+training:
+  # Commonly changed.
+  train_file: train.hdf
+  val_file: val.hdf
+  batch_size: 32
+  num_workers: 4
+  lr_init: 0.001
+
+  # Data/label settings.
+  dim: 1024
+  segment_length: 4096
+  edge_buffer: 2048
+  noise_prob: 0.60
+
+  # Advanced curriculum settings; usually leave unchanged.
+  p_higher_init: 0.90
+  p_higher_fin: 0.25
