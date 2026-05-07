@@ -31,6 +31,13 @@ SEGMENT_LENGTH=4096
 EDGE_BUFFER=2048
 DIM=1024
 
+SAMPLE_RATE=4096
+BAND_LOW=25.0
+BAND_HIGH=450.0
+BANDPASS_ORDER=4
+PSD_FLOOR=1e-48
+PSD_OUTBAND=1e40
+
 srun python -u train.py \
   --batch_size "${BATCH_SIZE}" \
   --data_dir "${DATA_DIR}" \
@@ -46,6 +53,13 @@ srun python -u train.py \
   --p_higher_fin "${P_HIGHER_FIN}" \
   --segment_length "${SEGMENT_LENGTH}" \
   --edge_buffer "${EDGE_BUFFER}" \
-  --dim "${DIM}"
+  --dim "${DIM}" \
+  --sample_rate "$SAMPLE_RATE" \
+  --band_low "$BAND_LOW" \
+  --band_high "$BAND_HIGH" \
+  --bandpass_order "$BANDPASS_ORDER" \
+  --psd_floor "$PSD_FLOOR" \
+  --psd_outband "$PSD_OUTBAND" \
+
 # If your noise files are already whitened, add:
 # --noise_is_whitened
