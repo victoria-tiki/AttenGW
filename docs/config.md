@@ -124,6 +124,11 @@ training:
   num_workers: 4
   lr_init: 0.001
 ```
+`batch_size` controls the number of examples per batch.
+
+`num_workers` controls dataloader parallelism. Use 0 for local debugging if multiprocessing causes problems.
+
+`lr_init` is the initial Adam learning rate.
 
 Data and label settings:
 
