@@ -32,10 +32,12 @@ For signal-plus-noise examples, it:
 6. rescales the waveform into the selected training SNR range,
 7. injects the waveform into raw detector noise,
 8. whitens the combined strain using the noise PSDs,
-9. crops a `segment_length` window around the injected merger,
+9. crops a `segment_length` window around the injected merger (merger placed randomly in second half of window),
 10. returns the two-channel strain window and a binary target mask.
 
-For noise-only examples, it draws a raw detector-noise window, whitens it, applies the same windowing logic, and returns an all-zero target mask.
+For noise-only examples, it draws a raw detector-noise window, whitens it, applies the same windowing logic, and returns an all-zero target mask. 
+
+The dataloader also applies local glitch checks after whitening/windowing: positive samples reject large outliers in the labeled pre-merger region using a `k_sigma` threshold, with limited retries before falling back to noise-only if needed. Noise-only samples are checked more loosely over the full window so the model still sees realistic non-Gaussian detector noise, while preventing the model from firing on glitches. 
 
 The input tensor has shape:
 
