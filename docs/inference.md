@@ -6,6 +6,12 @@ The model outputs a score between 0 and 1 at each time step. Treat these scores 
 
 ## General inference flow
 
+<p align="center">
+  <img src="../img/GW170817_prediction.png" width="650" alt="Inference prediction for GW170817">
+</p>
+
+<sup>Example inference output for GW170817, with a single clear trigger near the event.</sup>
+
 1. Load detector strain.
 2. Slice it into overlapping windows.
 3. Run the trained model on each window.
