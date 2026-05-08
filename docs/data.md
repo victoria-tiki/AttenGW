@@ -1,33 +1,85 @@
-# Data and downloader
+# Data format and example data
 
-`downloader.py` downloads H1/L1 detector strain from GWOSC, applies optional quality-control checks, estimates PSDs, and saves HDF5 noise or signal windows for training.
+This repository expects two kinds of data:
 
-For new runs, the recommended setup is:
+1. injection files containing clean detector-projected waveforms, used as signal examples;
+2. noise files containing detector strain and PSDs, used by the dataloader to construct signal+noise and noise-only training examples.
+
+A small example dataset is included under:
+
+```text
+example_data/
+  signal/
+  noise/
+```
+
+These files are intended only for smoke tests and basic end-to-end checks. They are not the full dataset used for paper-scale training.
+
+## Injection file format
+
+The training and validation injection files should be HDF5 files with the following structure:
+
+```text
+/data/H1_wave   shape: (N, waveform_length)
+/data/L1_wave   shape: (N, waveform_length)
+```
+
+where `N` is the number of injections in the file, and `waveform_length` is the number of time samples in each clean waveform.
+
+The config file should point `paths.data_dir` to the directory containing these files, and `training.train_file` / `training.val_file` should name the specific train and validation files.
+
+Example:
 
 ```yaml
-shared:
-  noise_is_whitened: false
+paths:
+  data_dir: example_data/signal
+
+training:
+  train_file: train_tiny.hdf
+  val_file: val_tiny.hdf
 ```
 
-With this setting, the downloader saves raw detector strain and PSD information. Whitening is handled during training.
+The datagenerator reads the injection files as:
 
-## Run the downloader
-
-```bash
-python downloader.py --config configs/example.yaml
+```text
+<data_dir>/<train_file>
+<data_dir>/<val_file>
 ```
 
-Optional SLURM usage:
+and expects both files to contain `/data/H1_wave` and `/data/L1_wave`.
 
-```bash
-sbatch scripts/submit_download.slurm
+## Included tiny injection files
+
+The example injection files in `example_data/signal/` contain synthetic detector-projected compact-binary waveforms. They are provided so that users can test the repository without downloading or generating a full injection dataset.
+
+These files are for testing only. They are not intended to reproduce the training distribution or results of the paper.
+
+The included example injections were generated with:
+
+```text
+waveform approximant: IMRPhenomXPHM
+detectors: H1 and L1
+sample rate: 4096 Hz
+lower frequency cutoff: 20 Hz
+distance range: 100–2500 Mpc
 ```
 
-The downloader reads defaults from the YAML config and then accepts command-line overrides.
+The sampled parameters used for the example set were:
 
-## Output files
+```text
+m1: power-law distribution p(m1) ∝ m1^-2.3 on [5, 50] solar masses
+q = m2/m1: uniform on [0.1, 1], with m2 clipped to at least 5 solar masses
+spin magnitudes: uniform on [0, 0.8]
+spin directions: isotropic
+inclination, polarization, RA, Dec: isotropic
+distance: uniform in Euclidean volume
+```
 
-The downloader saves HDF5 files in `paths.noise_dir`. Training expects noise files containing:
+The waveforms were projected onto H1 and L1 using the detector response. The files may also contain a `/params` group with the sampled physical parameters, but the datagenerator only requires `/data/H1_wave` and `/data/L1_wave`.
+
+## Noise file format
+
+Noise files should be HDF5 files with the following structure:
 
 ```text
 /strain_H1
@@ -37,104 +89,75 @@ The downloader saves HDF5 files in `paths.noise_dir`. Training expects noise fil
 /freqs
 ```
 
-These are the files consumed by the dataloader during training.
+The downloader script writes files in this format.
 
-## Required injection files
-
-Training also needs user-provided waveform injection files in `paths.data_dir`. The training and validation filenames are configured under:
+For the default dataloader path:
 
 ```yaml
+shared:
+  noise_is_whitened: false
+```
+
+the noise strain datasets should contain raw, unwhitened strain:
+
+```text
+/strain_H1
+/strain_L1
+```
+
+The dataloader then uses the saved PSDs to whiten and band-limit the data internally.
+
+For the legacy dataloader path:
+
+```yaml
+shared:
+  noise_is_whitened: true
+```
+
+the noise strain datasets should already be whitened. The PSD datasets are still required because the dataloader uses them to whiten the injected clean signals.
+
+## Included tiny noise file
+
+The example noise file in `example_data/noise/` is a short raw-noise file intended for smoke testing. It is approximately 60 seconds long and contains:
+
+```text
+/strain_H1
+/strain_L1
+/psd_H1
+/psd_L1
+/freqs
+```
+
+The accompanying plots in the same folder are diagnostic outputs from the downloader, such as PSD and timeline plots. They are included only to show what the downloader produces and to make the example data easier to inspect.
+
+## Running a small test with the example data
+
+To run a small local or SLURM test using the included example files, edit the config file to point to the example folders:
+
+```yaml
+paths:
+  data_dir: example_data/signal
+  noise_dir: example_data/noise
+  checkpoint_dir: checkpoints
+
 training:
-  train_file: train.hdf
-  val_file: val.hdf
+  train_file: train_tiny.hdf
+  val_file: val_tiny.hdf
+
+shared:
+  noise_is_whitened: false
 ```
 
-Each injection file should contain:
+Then run training with:
 
-```text
-/data/H1_wave
-/data/L1_wave
+```bash
+python train.py --config configs/example.yaml
 ```
 
-with shape:
+or submit through SLURM with:
 
-```text
-(N, waveform_length)
+```bash
+sbatch scripts/submit.slurm
 ```
 
-where `N` is the number of waveforms.
-
-## Downloader modes
-
-```yaml
-mode: noise
-```
-
-Allowed values:
-
-```text
-noise
-signal
-both
-```
-
-For most training runs, use `noise` to download event-free detector noise and provide injection files separately.
-
-## Window selection
-
-```yaml
-gps_start: 1248652818
-gps_end: 1249862418
-window_len_s: 4096
-n_segments: 5
-require_full_window: true
-```
-
-`gps_start` and `gps_end` define the search interval.
-
-`window_len_s` is the duration of each downloaded window in seconds.
-
-`n_segments` limits how many accepted windows are saved. Use `null` if you want as many as possible.
-
-`require_full_window: true` skips partial windows.
-
-## Event exclusion
-
-```yaml
-event_pad_s: 30.0
-```
-
-In noise mode, the downloader excludes windows around known events, padded by this amount.
-
-## Quality-control settings
-
-The downloader can reject windows using simple detector-strain checks. These checks are meant to avoid obviously bad data, not to fully certify science-grade data quality.
-
-```yaml
-glitch_sigma: 5.0
-glitch_max_frac: 0.01
-max_std_ratio: 10.0
-amp_thresh:
-rms_thresh:
-max_raw_std:
-min_raw_std:
-```
-
-`glitch_sigma` identifies short loud glitches using a robust MAD-based threshold.
-
-`glitch_max_frac` rejects a window if too many samples are flagged.
-
-`max_std_ratio` rejects windows where H1 and L1 have very different standard deviations.
-
-Leave `amp_thresh`, `rms_thresh`, `max_raw_std`, and `min_raw_std` blank to disable those checks.
-
-## Diagnostic plots
-
-```yaml
-plot_timeline: true
-plot_timeseries: true
-plot_psd: true
-target_plot_fs: 1024.0
-```
-
-These options save quick diagnostic figures. They are useful for checking whether the chosen GPS range and QC settings are producing reasonable files.
+The example data is intentionally small. It is useful for checking that the dataloader, model, training loop, checkpoint saving, and plotting work end-to-end, but it should not be used to assess final model performance.
