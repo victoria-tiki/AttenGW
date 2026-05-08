@@ -221,7 +221,9 @@ class GWDataset(Dataset):
              initial_epoch=1, segment_length=4096, edge_buffer=2048, merger_out_prob=0.2,
              validation_epoch=None, p_higher_init=0.5, p_higher_fin=0.05,
              train_file="train.hdf", val_file="test.hdf",
-             noise_is_whitened=False,noise_range=None,):
+             noise_is_whitened=False, noise_range=None,
+             sample_rate=4096, band_low=25.0, band_high=450.0,
+             bandpass_order=4, psd_floor=1e-48, psd_outband=1e40):
 
         self.noise_dir = noise_dir
         self.segment_length = segment_length
@@ -261,7 +263,7 @@ class GWDataset(Dataset):
             self.psd_H1_files = None
             self.psd_L1_files = None
 
-        self.fs = 4096
+        self.fs = sample_rate
         self.dt = 1 / self.fs
         self.batch_size = batch_size
         self.n_channels = n_channels
@@ -286,16 +288,20 @@ class GWDataset(Dataset):
             self.tau = -10.0 / np.log(self.p_higher_fin / self.p_higher_init)
 
 
-        # pre-compute band-pass coefficients 
-        lowcut, highcut = 25, 450
-        nyq = 0.5 / self.dt
-        self._butter = butter(4, [lowcut / nyq, highcut / nyq], btype='band')
-        self._psd_cache = {}
+        # pre-compute band-pass coefficients
+        self.band_low = band_low
+        self.band_high = band_high
+        self.bandpass_order = bandpass_order
+        self.psd_floor = psd_floor
+        self.psd_outband = psd_outband  # "infinite" PSD outside band
         
-        self.psd_floor = 1e-48   
-        self.psd_outband = 1e40  # "infinite" PSD outside band
-        self.band_low = lowcut
-        self.band_high = highcut
+        nyq = 0.5 / self.dt
+        self._butter = butter(
+            self.bandpass_order,
+            [self.band_low / nyq, self.band_high / nyq],
+            btype='band',
+        )
+        self._psd_cache = {}
         
 
 
@@ -892,7 +898,9 @@ class WaveformDataModule(LightningDataModule):
                  num_workers=1, initial_epoch=0, segment_length=4096, edge_buffer=2048,
                  merger_out_prob=0.0, validation_epoch=10, p_higher_init=0.5, p_higher_fin=0.1,
                  train_file="train.hdf", val_file="test.hdf",
-                 noise_is_whitened=False):
+                 noise_is_whitened=False,
+                 sample_rate=4096, band_low=25.0, band_high=450.0,
+                 bandpass_order=4, psd_floor=1e-48, psd_outband=1e40):
         super().__init__()
         self.batch_size = batch_size
         self.dim = dim
@@ -914,6 +922,12 @@ class WaveformDataModule(LightningDataModule):
         self.train_file = train_file
         self.val_file = val_file
         self.noise_is_whitened = noise_is_whitened
+        self.sample_rate = sample_rate
+        self.band_low = band_low
+        self.band_high = band_high
+        self.bandpass_order = bandpass_order
+        self.psd_floor = psd_floor
+        self.psd_outband = psd_outband
 
     def setup(self, stage=None):
         if stage == 'fit' or stage is None:
@@ -923,19 +937,23 @@ class WaveformDataModule(LightningDataModule):
                 train_file=self.train_file, val_file=self.val_file,
                 noise_is_whitened=self.noise_is_whitened,
                 initial_epoch=self.initial_epoch, segment_length=self.segment_length, edge_buffer=self.edge_buffer,
-                merger_out_prob=self.merger_out_prob, 
-                p_higher_init=self.p_higher_init,p_higher_fin=self.p_higher_fin
+                merger_out_prob=self.merger_out_prob,
+                p_higher_init=self.p_higher_init, p_higher_fin=self.p_higher_fin,
+                sample_rate=self.sample_rate, band_low=self.band_low, band_high=self.band_high,
+                bandpass_order=self.bandpass_order, psd_floor=self.psd_floor, psd_outband=self.psd_outband
             )
+    
             self.val_dataset = GWDataset(
                 self.noise_dir, self.data_dir, self.batch_size, dim=self.dim,
                 n_channels=self.n_channels, shuffle=False, train=False, gaussian=self.gaussian, noise_prob=self.noise_prob,
                 train_file=self.train_file, val_file=self.val_file,
                 noise_is_whitened=self.noise_is_whitened,
                 initial_epoch=self.validation_epoch, segment_length=self.segment_length, edge_buffer=self.edge_buffer,
-                merger_out_prob=self.merger_out_prob, validation_epoch=self.validation_epoch, 
-                p_higher_init=self.p_higher_init,p_higher_fin=self.p_higher_fin
+                merger_out_prob=self.merger_out_prob, validation_epoch=self.validation_epoch,
+                p_higher_init=self.p_higher_init, p_higher_fin=self.p_higher_fin,
+                sample_rate=self.sample_rate, band_low=self.band_low, band_high=self.band_high,
+                bandpass_order=self.bandpass_order, psd_floor=self.psd_floor, psd_outband=self.psd_outband
             )
-
 
     def train_dataloader(self):
         
