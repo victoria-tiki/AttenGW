@@ -81,6 +81,19 @@ target_plot_fs: 1024.0
 ```
 The diagnostic plot options save quick checks of the downloaded data. `plot_timeline` shows where accepted windows fall in the requested GPS interval, `plot_timeseries` saves example strain plots, and `plot_psd` saves PSD plots. `target_plot_fs` controls the plotting sample rate only; it does not change the saved training data.
 
+<p align="center">
+  <img src="../img/timeline_ALL_1248652818_1249862418.png" width="650" alt="Downloader timeline of available data">
+</p>
+
+<sup>Example downloader timeline showing valid data intervals in the requested GPS range.</sup>
+
+<p align="center">
+  <img src="../img/timeline_SAVED_1248652818_1249862418.png" width="650" alt="Downloader timeline of saved windows">
+</p>
+
+<sup>Example downloader timeline showing the windows saved after QC and selection.</sup>
+
+
 The advanced QC options are:
 
 ```yaml
@@ -111,6 +124,19 @@ These options control lightweight quality checks applied while downloading detec
 `rms_thresh` optionally rejects windows whose bandpassed RMS is too large. Leave blank to disable.
 
 `max_raw_std` and `min_raw_std` optionally reject windows whose QC/bandpassed standard deviation is outside the requested range. Leave blank to disable.
+
+<p align="center">
+  <img src="../img/noise_ts_bp_raw_1249201597_1249201657.png" width="650" alt="Bandpassed raw detector noise example">
+</p>
+
+<sup>Example bandpassed H1/L1 noise segment produced by the downloader diagnostics.</sup>
+
+<p align="center">
+  <img src="../img/psd_noise_raw_1249201597_1249201657.png" width="500" alt="Example PSD plot for downloaded noise">
+</p>
+
+<sup>Example PSD diagnostic plot saved with a downloaded noise window.</sup>
+
 
 ## `training`
 
