@@ -1,48 +1,42 @@
-# Training
+# Training guide
 
-`train.py` trains the attention-based detector with PyTorch Lightning. It reads defaults from `configs/example.yaml` and allows command-line overrides.
-
-## Run training
-
-For a full run on a GPU cluster:
-
-```bash
-sbatch scripts/submit_train.slurm
-```
-
-For a small local smoke test:
-
-```bash
-python train.py --config configs/example.yaml --checkpoint_dir /tmp/attengw_train_test --batch_size 2 --num_workers 0
-```
+This page gives a practical overview of how training works and what to change when the model is not behaving well. For a plain description of every config option, see [config.md](config.md).
 
 ## Current recommended data flow
 
-For new runs, use:
+For new runs, use the raw-noise workflow:
 
 ```yaml
 shared:
   noise_is_whitened: false
 ```
 
-This selects the current raw-noise dataloader path.
+In this mode, the downloader saves raw H1/L1 detector strain together with PSDs. The training dataloader then builds examples dynamically from user-provided synthetic injections and downloaded real noise.
 
-During training, the dataloader:
+For each sample, the dataloader first decides whether to draw a signal-plus-noise example or a pure-noise example. This is controlled by `noise_prob`.
 
-1. chooses either a waveform injection or a noise-only example,
-2. selects a real detector-noise chunk,
-3. injects the signal into noise when applicable,
-4. uses PSD information from the noise file,
-5. whitens and band-limits the sample,
-6. returns an input tensor and binary target mask.
+For signal-plus-noise examples, it:
 
-The model input has shape:
+1. loads one synthetic H1/L1 waveform pair from `training.train_file` or `training.val_file`,
+2. finds the merger time from the waveform peak,
+3. chooses one downloaded real-noise HDF5 file,
+4. builds band-limited PSD interpolants from that noise file,
+5. estimates the waveform's matched-filter-style network SNR,
+6. rescales the waveform into the selected training SNR range,
+7. injects the waveform into raw detector noise,
+8. whitens the combined strain using the noise PSDs,
+9. crops a `segment_length` window around the injected merger,
+10. returns the two-channel strain window and a binary target mask.
+
+For noise-only examples, it draws a raw detector-noise window, whitens it, applies the same windowing logic, and returns an all-zero target mask.
+
+The input tensor has shape:
 
 ```text
 [segment_length, 2]
 ```
 
-corresponding to L1 and H1 channels.
+corresponding to L1 and H1.
 
 The target has shape:
 
@@ -50,55 +44,119 @@ The target has shape:
 [segment_length, 1]
 ```
 
-and is 1 near the merger and 0 elsewhere. For noise-only examples, the target is all zeros.
+and is set to 1 for the `dim` samples immediately before the merger and 0 elsewhere. For pure-noise examples, the target is all zeros.
 
-## Main training parameters
+The model outputs one confidence score per timestep and is trained with binary cross-entropy against this mask.
 
-```yaml
-batch_size: 32
-num_workers: 4
-lr_init: 0.001
-```
+## Legacy mode
 
-`batch_size` controls the number of examples per batch.
-
-`num_workers` controls dataloader parallelism. Use `0` for local debugging if multiprocessing causes problems.
-
-`lr_init` is the initial Adam learning rate.
-
-## Data-generation parameters
+The repository still contains an older dataloader path for pre-whitened noise:
 
 ```yaml
-segment_length: 4096
-dim: 1024
-edge_buffer: 2048
-noise_prob: 0.60
+shared:
+  noise_is_whitened: true
 ```
 
-`segment_length` is the length of each training window in samples.
+This changes more than the noise file format: signal/noise mixing, SNR meaning, and preview diagnostics differ from the current raw-noise workflow. For new runs, keep `noise_is_whitened: false`. Use the old path only for reproducing older experiments or old checkpoints.
 
-`dim` is the number of samples before merger labeled as signal.
+See [`legacy.md`](legacy.md) for the differences.
 
-`edge_buffer` is used to reduce whitening/filtering edge artifacts.
+## SNR curriculum
 
-`noise_prob` is the probability of drawing a noise-only example. Increasing it can reduce false positives; decreasing it gives more signal examples.
+The raw-noise dataloader uses a simple SNR curriculum. During early epochs, injected examples are more likely to be drawn from the higher-SNR range. As training progresses, this probability decays, so the model sees more lower-SNR examples.
 
-## Curriculum parameters
+The two exposed curriculum parameters are:
 
 ```yaml
 p_higher_init: 0.90
 p_higher_fin: 0.25
 ```
 
-The current dataloader can preferentially sample easier, higher-SNR examples early in training and reduce that probability over time.
+`p_higher_init` is the initial probability of sampling from the higher-SNR range. `p_higher_fin` is the floor this probability decays toward. With the current implementation, the decay is set internally to happen over the first 10 epochs.
 
-Start with the defaults. Change these only after checking validation behavior and diagnostic plots.
+The current raw-noise dataloader uses two hard-coded target-SNR ranges:
+
+```text
+higher-SNR range: 10–25
+lower-SNR range:   7–15
+```
+
+If you want to change the SNR ranges themselves, edit them in `data_generator.py`. If you only want to change how often the higher-SNR range is sampled, change `p_higher_init` and `p_higher_fin` in the YAML config.
+
+## What to change first
+
+Most training issues should be addressed in this order:
+
+1. Check the diagnostics and preview plot.
+2. Adjust `noise_prob`.
+3. Adjust the curriculum probabilities.
+4. Adjust learning rate only if the loss behavior suggests optimization trouble.
+5. Change preprocessing/band settings if the data diagnostics suggest a mismatch.
+
+Do not tune everything at once. This model is sensitive to the balance between signal vs noise-only examples, SNR distribution, and detector-noise quality.
+
+## Main training knobs
+
+### `noise_prob`
+
+`noise_prob` controls how often the dataloader returns a pure-noise example.
+
+Increase it if inference produces too many triggers in noise-only stretches. Decrease it if the model is not learning the signal class or misses obvious injections. A reasonable starting range is:
+
+```text
+0.60–0.70
+```
+
+### Curriculum probabilities
+
+`p_higher_init` and `p_higher_fin` control how often the dataloader samples from the higher-SNR range.
+
+Increase `p_higher_init` if early training does not learn loud signals. Increase `p_higher_fin` if the final model still misses relatively clear signals. Decrease `p_higher_fin` if performance looks too biased toward easy injections and weak on realistic lower-SNR cases.
+
+### Label width: `dim`
+
+`dim` controls how many samples immediately before merger are labeled as signal.
+
+Larger labels make the task easier and produce broader peaks. Smaller labels give sharper timing but can make training harder. At 4096 Hz:
+
+```text
+dim = 1024  ->  0.25 s
+dim = 2048  ->  0.50 s
+```
+
+Choose this based on the signal duration and inference trigger logic.
+
+### Window length: `segment_length`
+
+`segment_length` is the number of samples seen by the model. At 4096 Hz:
+
+```text
+segment_length = 4096  ->  1 second
+```
+
+Change this only if the signal class needs more context. Longer windows cost more memory and may require changes to the model, label width, inference offsets, and peak-finding settings.
+
+### Edge buffer and band settings
+
+`edge_buffer` helps keep whitening/filtering edge artifacts away from the final training window. Increase it if preview plots show edge artifacts leaking into samples.
+
+`band_low`, `band_high`, `psd_floor`, and `psd_outband` affect PSD interpolation and whitening. Keep the default 25–450 Hz range unless PSD plots or noise diagnostics suggest a mismatch.
+
+### Learning rate and scheduler
+
+The training script uses Adam, binary cross-entropy, and `ReduceLROnPlateau`. The main exposed optimizer setting is:
+
+```yaml
+lr_init: 0.001
+```
+
+Lower `lr_init` if the loss is unstable or diverges. If training is slow but stable, the default is usually a better first run than over-tuning the optimizer.
 
 ## Diagnostics
 
-At the start of training, the script computes basic validation-set diagnostics on rank 0, including raw strain amplitude statistics and matched-filter SNR statistics.
+At the start of training, the script runs early diagnostics on rank 0. These print validation-set raw strain amplitude statistics and matched-filter SNR statistics from a sample of validation injections.
 
-For the current raw-noise path, it also saves a preview figure:
+For the current raw-noise path, the script also saves:
 
 ```text
 training_batch_preview.png
@@ -106,31 +164,22 @@ training_batch_preview.png
 
 in `checkpoint_dir`.
 
-This preview is useful for catching path/config mistakes before committing to a long run.
+This plot shows randomly generated training windows, including the detector channels, target region, clean signal overlay for injected examples, and approximate SNR. Use it before trusting a long training run.
 
-## Checkpoints and logs
+Check that:
 
-Training writes checkpoints to:
+- signal examples are visible in at least some rows,
+- the highlighted target region sits immediately before the merger,
+- noise-only examples have all-zero targets,
+- signal amplitudes are not dominated by obvious glitches,
+- the plotted SNRs look plausible for the intended training regime.
 
-```yaml
-paths:
-  checkpoint_dir: /path/to/checkpoints_dir
-```
+Preview plotting is skipped when `noise_is_whitened: true`; see [`legacy.md`](legacy.md).
 
-Checkpoints are saved with filenames like:
+## Interpreting training behavior
 
-```text
-model_attenGW-{epoch}-{val_loss}
-```
+Do not rely only on training or even validation loss only. During training and validation, the model sees only those noise segments stored in `paths.noise_dir`. Performance can look good on those segments, but weak out-of-distribution. The strongest validation is to evaluate on entirely different noise segments from those used during training. This is not currently automated in AttenGW, but it is the best way to test generalization to new detector noise.
 
-The training script monitors validation loss and saves checkpoints during the run.
+Tune on validation data only. If validation noise is much cleaner or from a different observing period, validation loss can look acceptable whie inference false positives remain high.
 
-## Good practice
-
-Tune parameters on validation data, not final test data.
-
-Change one major parameter at a time.
-
-Check diagnostic plots before interpreting training metrics.
-
-Keep the downloaded noise, injection files, and inference data consistent in sampling rate and preprocessing assumptions.
+Keep a final test set untouched until the end. Use held-out true events or final benchmark sets only after choosing the training configuration and inference parameters to avoid data leakage. 
