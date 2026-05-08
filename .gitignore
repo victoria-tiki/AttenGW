@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv*/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Logs
+logs/
+*.out
+*.err
+slurm-*.out
+
+# Training outputs
+checkpoints/
+lightning_logs/
+*.ckpt
+
+# Generated/downloaded data
+noise/
+segments_output/
+
+# Large HDF5 data by default
+*.hdf5
+*.h5
+*.hdf
+
+# But keep intentional small example files
+!example_data/**/*.hdf5
+!example_data/**/*.h5
+!example_data/**/*.hdf
+
+# OS/editor
+.DS_Store
+.vscode/
