@@ -77,7 +77,7 @@ with shape:
 /freqs
 ```
 
-See [`docs/config.md`](docs/config.md) for the main configuration options.
+See [`docs/config.md`](docs/config.md) for the main configuration options. See [`docs/data.md`](docs/data.md) for more in-depth descriptions of expected data formats. Example datasets (both for injected signals and noise) that may be used to test AttenGW are provided in example_data. See `data.md` for a description of those datasets. 
 
 ---
 
@@ -97,7 +97,7 @@ sbatch scripts/submit_download.slurm
 
 The downloader can save diagnostic timeline, time-series, and PSD plots depending on the options in `configs/example.yaml`.
 
-See [`docs/data.md`](docs/data.md) for downloader behavior, output format, and QC options.
+See [`docs/config.md`](docs/config.md) for downloader configuration options to be changed through the config script.
 
 ---
 
@@ -117,7 +117,7 @@ python train.py --config configs/example.yaml --checkpoint_dir /tmp/attengw_trai
 
 The training script loads defaults from the YAML config, but command-line arguments can override them.
 
-See [`docs/training.md`](docs/training.md) for the training data flow and the main parameters worth changing.
+See [`docs/config.md`](docs/config.md) for an overview of training parameters to be changed through the config script. See [`docs/training.md`](docs/training.md) for the training data flow and the main parameters worth changing. 
 
 ---
 
@@ -129,13 +129,6 @@ See [`docs/inference.md`](docs/inference.md) for notes on interpreting model sco
 
 ---
 
-## Legacy behavior
-
-The old `noise_is_whitened=True` path is retained for reproducing older experiments that used pre-whitened noise. New runs should normally use the default raw-noise workflow.
-
-See [`docs/legacy.md`](docs/legacy.md) before using `noise_is_whitened=True`.
-
----
 
 ## Repository map
 
@@ -153,4 +146,4 @@ docs/                       Extended documentation
 
 ## Data and checkpoints
 
-Large training, validation, noise, and checkpoint files are not stored in the repository. Generate or download them locally and point the config paths to their location.
+Large training, validation, noise, and checkpoint files are not stored in the repository. Generate or download them locally and point the config paths to their location. Small example datasets are provided in `/example_data`. These are to be used for testing only (see [`docs/data.md`](docs/data.md)).
