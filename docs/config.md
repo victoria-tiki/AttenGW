@@ -173,6 +173,7 @@ noise_prob: 0.60
 
 `noise_prob` is the probability of drawing a noise-only training example. Raising it can make the model more conservative; lowering it gives the model more signal examples.
 
+The dataloader also applies local glitch checks during training sample generation; these thresholds and retry behavior are currently hard-coded in `data_generator.py` rather than controlled through `configs/example.yaml`.
 
 Curriculum settings:
 
