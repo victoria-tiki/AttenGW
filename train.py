@@ -294,7 +294,6 @@ def plot_samples(args, rank: int) -> None:
         psd_outband=args.psd_outband,
     )
 
-
     plot_dm.setup(stage='fit')
     dataset = plot_dm.train_dataset
     dataset.plotsamples = True
@@ -310,16 +309,20 @@ def plot_samples(args, rank: int) -> None:
 
     save_path = os.path.join(args.checkpoint_dir, "training_batch_preview.png")
 
-    plot_examples(
-        X_batch.numpy(),
-        y_batch.numpy(),
-        snr_batch.numpy(),
-        wL_clean.numpy().copy(),
-        wH_clean.numpy().copy(),
-        save_path=save_path,
-    )
-    print(f"Saved {os.path.abspath(save_path)}", flush=True)
-    
+    try:
+        plot_examples(
+            X_batch.numpy(),
+            y_batch.numpy(),
+            snr_batch.numpy(),
+            wL_clean.numpy().copy() if wL_clean is not None else None,
+            wH_clean.numpy().copy() if wH_clean is not None else None,
+            save_path=save_path,
+            sample_rate=args.sample_rate,
+        )
+        print(f"Saved {os.path.abspath(save_path)}", flush=True)
+    except Exception as e:
+        print(f"[rank {rank}] WARNING: preview plotting failed: {e}", flush=True)
+        print("[rank 0] Continuing training without preview plot.", flush=True)    
     
 def main():
     
@@ -382,9 +385,8 @@ def main():
 
     #### Continue with train script ###################
     
-    
     rank = get_rank()
-
+    
     #----- callbacks --------
     RegularModelCheckpoints = ModelCheckpoint(
         dirpath=args.checkpoint_dir,
@@ -397,12 +399,20 @@ def main():
     callbacks = [RegularModelCheckpoints, LearningRateMonitor(logging_interval='epoch'), progress_bar]
 
     #----- set up training -----
-    print('setting up trainer')
+    print("setting up trainer", flush=True)
     
-    devices = torch.cuda.device_count()
-    accelerator = "gpu" if devices > 0 else "cpu"
-    devices = devices if devices > 0 else 1
-    strategy = "ddp" if accelerator == "gpu" and (devices > 1 or args.num_nodes > 1) else "auto"
+    num_cuda_devices = torch.cuda.device_count()
+    accelerator = "gpu" if num_cuda_devices > 0 else "cpu"
+    devices = num_cuda_devices if num_cuda_devices > 0 else 1
+    
+    use_ddp = accelerator == "gpu" and (devices > 1 or args.num_nodes > 1)
+    strategy = "ddp" if use_ddp else "auto"
+    
+    print(
+        f"Trainer config: accelerator={accelerator}, "
+        f"devices={devices}, num_nodes={args.num_nodes}, strategy={strategy}",
+        flush=True,
+    )
     
     trainer = Trainer(
         max_epochs=100,
@@ -413,8 +423,8 @@ def main():
         enable_progress_bar=True,
         enable_model_summary=True,
         callbacks=callbacks,
-        #limit_train_batches=0.0001,
-        #limit_val_batches=0.0001,
+        # limit_train_batches=0.0001,
+        # limit_val_batches=0.0001,
     )
 
     model = LightningModel(lr=args.lr_init, internal_epoch=args.initial_epoch)
