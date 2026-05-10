@@ -160,15 +160,33 @@ def low_max_snr(epoch):
     
 
 
-def plot_examples(X_batch, y_batch, snrs, wL_clean=None, wH_clean=None, save_path="training_examples.png", sample_rate=4096,):
-    fig, axs   = plt.subplots(5, 2, figsize=(12, 2.5 * 5),sharex=False)
-    for i in range(5):
+def plot_examples(X_batch, y_batch, snrs, wL_clean=None, wH_clean=None,
+                  save_path="training_examples.png", sample_rate=4096):
+
+    snrs = np.asarray(snrs)
+
+    n_plot = min(5, len(X_batch), len(y_batch), len(snrs))
+
+    if wL_clean is not None:
+        n_plot = min(n_plot, len(wL_clean))
+    if wH_clean is not None:
+        n_plot = min(n_plot, len(wH_clean))
+
+    fig, axs = plt.subplots(n_plot, 2, figsize=(12, 2.5 * n_plot), sharex=False)
+
+    if n_plot == 1:
+        axs = np.expand_dims(axs, axis=0)
+
+    for i in range(n_plot):
         signal_L = X_batch[i,:,0]
         signal_H = X_batch[i,:,1]
         target = y_batch[i, :, 0]
-        rho = float(snrs[i])
-        times = np.arange(len(signal_H)) / sample_rate  
 
+        rho_vals = np.asarray(snrs[i]).reshape(-1)
+        rho = float(rho_vals[0]) if len(rho_vals) > 0 else 0.0
+
+        times = np.arange(len(signal_H)) / sample_rate
+        
         if rho<0.01:
             t_min = 0
             t_max = 1.0
