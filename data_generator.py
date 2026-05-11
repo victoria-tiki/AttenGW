@@ -236,7 +236,7 @@ class GWDataset(Dataset):
     def __init__(self, noise_dir, data_dir, batch_size=32, dim=2048, n_channels=2,
              shuffle=True, train=True, gaussian=False, noise_prob=0.6,
              initial_epoch=1, segment_length=4096, edge_buffer=2048, merger_out_prob=0.2,
-             validation_epoch=None, p_higher_init=0.5, p_higher_fin=0.05,
+             validation_epoch=None, p_higher_init=0.5, p_higher_fin=0.05, snr_range_high=(10.0, 25.0), snr_range_low=(7.0, 15.0),
              train_file="train.hdf", val_file="test.hdf",
              noise_is_whitened=False, noise_range=None,
              sample_rate=4096, band_low=25.0, band_high=450.0,
@@ -299,6 +299,8 @@ class GWDataset(Dataset):
         # calculate params for boosting easier samples in earlier epochs
         self.p_higher_init = p_higher_init
         self.p_higher_fin  = p_higher_fin
+        self.snr_range_high = tuple(snr_range_high)
+        self.snr_range_low = tuple(snr_range_low)
         if np.isclose(self.p_higher_init, self.p_higher_fin):
             self.tau = np.inf
         else:
@@ -768,10 +770,10 @@ class GWDataset(Dataset):
             u = np.random.rand()
             if u < self.p_higher:
                 # easy / loud bin
-                target_snr = np.random.uniform(10.0, 25.0)
+                target_snr = np.random.uniform(*self.snr_range_high)
             else:
                 # harder / quiet bin 
-                target_snr = np.random.uniform(7.0, 15.0)
+                target_snr = np.random.uniform(*self.snr_range_low)
 
             # rescale waveform to target SNR
             scale = target_snr / (snr0 + 1e-6)
@@ -914,6 +916,7 @@ class WaveformDataModule(LightningDataModule):
                  shuffle=True, gaussian=False, noise_prob=0.7, noise_range=None,
                  num_workers=1, initial_epoch=0, segment_length=4096, edge_buffer=2048,
                  merger_out_prob=0.0, validation_epoch=10, p_higher_init=0.5, p_higher_fin=0.1,
+                 snr_range_high=(10.0, 25.0), snr_range_low=(7.0, 15.0),
                  train_file="train.hdf", val_file="test.hdf",
                  noise_is_whitened=False,
                  sample_rate=4096, band_low=25.0, band_high=450.0,
@@ -936,6 +939,8 @@ class WaveformDataModule(LightningDataModule):
         self.validation_epoch = validation_epoch
         self.p_higher_init=p_higher_init
         self.p_higher_fin=p_higher_fin
+        self.snr_range_high = snr_range_high
+        self.snr_range_low = snr_range_low
         self.train_file = train_file
         self.val_file = val_file
         self.noise_is_whitened = noise_is_whitened
@@ -956,6 +961,7 @@ class WaveformDataModule(LightningDataModule):
                 initial_epoch=self.initial_epoch, segment_length=self.segment_length, edge_buffer=self.edge_buffer,
                 merger_out_prob=self.merger_out_prob,
                 p_higher_init=self.p_higher_init, p_higher_fin=self.p_higher_fin,
+                snr_range_high=self.snr_range_high, snr_range_low=self.snr_range_low,
                 sample_rate=self.sample_rate, band_low=self.band_low, band_high=self.band_high,
                 bandpass_order=self.bandpass_order, psd_floor=self.psd_floor, psd_outband=self.psd_outband
             )
@@ -968,6 +974,7 @@ class WaveformDataModule(LightningDataModule):
                 initial_epoch=self.validation_epoch, segment_length=self.segment_length, edge_buffer=self.edge_buffer,
                 merger_out_prob=self.merger_out_prob, validation_epoch=self.validation_epoch,
                 p_higher_init=self.p_higher_init, p_higher_fin=self.p_higher_fin,
+                snr_range_high=self.snr_range_high, snr_range_low=self.snr_range_low,
                 sample_rate=self.sample_rate, band_low=self.band_low, band_high=self.band_high,
                 bandpass_order=self.bandpass_order, psd_floor=self.psd_floor, psd_outband=self.psd_outband
             )
