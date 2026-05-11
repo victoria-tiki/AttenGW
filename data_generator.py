@@ -171,7 +171,7 @@ def plot_examples(X_batch, y_batch, snrs, wL_clean=None, wH_clean=None,
     if wH_clean is not None:
         n_plot = min(n_plot, len(wH_clean))
 
-    fig, axs = plt.subplots(n_plot, 2, figsize=(12, 2.5 * n_plot), sharex=False)
+    fig, axs = plt.subplots(n_plot, 2, figsize=(14, 2.8 * n_plot), sharex=False)
 
     if n_plot == 1:
         axs = np.expand_dims(axs, axis=0)
@@ -186,12 +186,10 @@ def plot_examples(X_batch, y_batch, snrs, wL_clean=None, wH_clean=None,
 
         times = np.arange(len(signal_H)) / sample_rate
         
-        if rho<0.01:
+        if rho < 0.01:
             t_min = 0
             t_max = 1.0
         else:
-            '''peak_idx = np.argmax((np.abs(signal_H) + np.abs(signal_L)) / 2)
-            peak_time = times[peak_idx]'''
             merger_indices = np.where(target > 0)[0]
             merger_idx = merger_indices[-1]
             peak_time = times[merger_idx]
@@ -199,34 +197,52 @@ def plot_examples(X_batch, y_batch, snrs, wL_clean=None, wH_clean=None,
             t_max = peak_time + 0.1
 
         # Plot H1
-        axs[i, 0].plot(times, signal_H, label="H1 signal+noise", color="black")
+        axs[i, 0].plot(times, signal_H, label="H1 signal + noise",
+                       color="#1f77b4", lw=1.1)
         if wH_clean is not None:
-            axs[i, 0].plot(times, wH_clean[i], label="H1 signal only", color="green", alpha=0.6)
+            axs[i, 0].plot(times, wH_clean[i], label="Injected signal",
+                           color="#ff7f0e", lw=1.6, alpha=0.9)
+
         ymin, ymax = axs[i, 0].get_ylim()
-        axs[i, 0].fill_between(times, ymin, ymax, where=target > 0, color="red", alpha=0.15, label="Merger region")
-        axs[i, 0].set_ylabel("H1 strain")
-        axs[i, 0].set_title(f"SNR = {rho:.2f}")
+        axs[i, 0].fill_between(times, ymin, ymax, where=target > 0,
+                               color="#9ecae1", alpha=0.35,
+                               label="Positive label region")
+
+        axs[i, 0].set_ylabel("H1 strain", fontsize=13)
+        axs[i, 0].set_title(f"SNR = {rho:.2f}", fontsize=15, pad=8)
         axs[i, 0].set_xlim([t_min, t_max])
+        axs[i, 0].grid(True, alpha=0.25)
 
         # Plot L1
-        axs[i, 1].plot(times, signal_L, label="L1 signal+noise", color="black")
+        axs[i, 1].plot(times, signal_L, label="L1 signal + noise",
+                       color="#1f77b4", lw=1.1)
         if wL_clean is not None:
-            axs[i, 1].plot(times, wL_clean[i], label="L1 signal only", color="green", alpha=0.6)
+            axs[i, 1].plot(times, wL_clean[i], label="Injected signal",
+                           color="#ff7f0e", lw=1.6, alpha=0.9)
+
         ymin, ymax = axs[i, 1].get_ylim()
-        axs[i, 1].fill_between(times, ymin, ymax, where=target > 0, color="red", alpha=0.15, label="Merger region")
-        axs[i, 1].set_ylabel("L1 strain")
-        axs[i, 1].set_title(f"SNR = {rho:.2f}")
+        axs[i, 1].fill_between(times, ymin, ymax, where=target > 0,
+                               color="#9ecae1", alpha=0.35,
+                               label="Positive label region")
+
+        axs[i, 1].set_ylabel("L1 strain", fontsize=13)
+        axs[i, 1].set_title(f"SNR = {rho:.2f}", fontsize=15, pad=8)
         axs[i, 1].set_xlim([t_min, t_max])
+        axs[i, 1].grid(True, alpha=0.25)
 
-        axs[i, 0].set_xlabel("t [s]")
-        axs[i, 1].set_xlabel("t [s]")
+        axs[i, 0].set_xlabel("Time [s]", fontsize=13)
+        axs[i, 1].set_xlabel("Time [s]", fontsize=13)
+
+        axs[i, 0].tick_params(axis="both", labelsize=11)
+        axs[i, 1].tick_params(axis="both", labelsize=11)
         
-        if i == 0:
-            axs[i, 0].legend(loc="upper right")
-    plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close()
+    handles, labels = axs[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=3,
+               frameon=False, fontsize=12, bbox_to_anchor=(0.5, -0.01))
 
+    plt.tight_layout(rect=[0, 0.05, 1, 1])
+    plt.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close()
 
 
 
@@ -1015,4 +1031,3 @@ class WaveformDataModule(LightningDataModule):
         self.epoch += 1
         if hasattr(self, "_logged_snr_this_epoch"):
             del self._logged_snr_this_epoch
-
