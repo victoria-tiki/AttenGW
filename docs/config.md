@@ -149,12 +149,16 @@ training:
   batch_size: 32
   num_workers: 4
   lr_init: 0.001
+  max_epochs: 100
 ```
 `batch_size` controls the number of examples per batch.
 
 `num_workers` controls dataloader parallelism. Use 0 for local debugging if multiprocessing causes problems.
 
 `lr_init` is the initial Adam learning rate.
+
+`max_epochs` is the maximum number of epochs before training is stopped, regardless of loss.
+
 
 Data and label settings:
 
@@ -180,8 +184,12 @@ Curriculum settings:
 ```yaml
 p_higher_init: 0.90
 p_higher_fin: 0.25
+snr_range_high: [10.0, 25.0]
+snr_range_low: [7.0, 15.0]
 ```
 
-These set the probability of sampling from the higher-SNR injection range. Training starts near `p_higher_init` and decays toward `p_higher_fin` over 10 epochs, so early epochs see more easy/loud examples and later epochs see more realistic lower-SNR examples. 
+`snr_range_high` and `snr_range_low` define the target matched-filter SNR ranges used for injected training examples. At each epoch, the dataloader samples from `snr_range_high` with `probability p_higher`; otherwise it samples from `snr_range_low`.
+
+`p_higher_init` and `p_higher_fin` control the schedule for p_higher. Training starts near `p_higher_init` and decays toward `p_higher_fin` over 10 epochs, so early epochs see more high-SNR examples and later epochs see more lower-SNR examples.
 
 Check [here](training.md) for more details on what parameters to change to improve training performance. 
