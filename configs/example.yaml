@@ -73,6 +73,7 @@ training:
   batch_size: 32
   num_workers: 4
   lr_init: 0.001
+  max_epochs: 100
 
   # Data/label settings.
   dim: 1024
@@ -83,3 +84,5 @@ training:
   # Advanced curriculum settings; usually leave unchanged.
   p_higher_init: 0.90
   p_higher_fin: 0.25
+  snr_range_high: [10.0, 25.0]
+  snr_range_low: [7.0, 15.0]
