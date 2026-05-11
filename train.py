@@ -128,6 +128,7 @@ def load_train_config(config_path):
         "batch_size": training["batch_size"],
         "num_workers": training["num_workers"],
         "lr_init": training["lr_init"],
+        "max_epochs": training["max_epochs"],
 
         # data generation
         "dim": training["dim"],
@@ -136,6 +137,8 @@ def load_train_config(config_path):
         "noise_prob": training["noise_prob"],
         "p_higher_init": training["p_higher_init"],
         "p_higher_fin": training["p_higher_fin"],
+        "snr_range_high": training["snr_range_high"],
+        "snr_range_low": training["snr_range_low"],
 
         # shared preprocessing
         "sample_rate": shared["sample_rate"],
@@ -269,6 +272,8 @@ def plot_samples(args, rank: int) -> None:
         num_workers=args.num_workers,
         p_higher_init=0.5,
         p_higher_fin=0.1,
+        snr_range_high=args.snr_range_high,
+        snr_range_low=args.snr_range_low,
         segment_length=args.segment_length,
         edge_buffer=args.edge_buffer,
         dim=args.dim,
@@ -336,12 +341,15 @@ def main():
     parser.add_argument('--num_workers', type=int, default=1, help='number of workers in dataloader')
     parser.add_argument('--num_nodes', type=int, default=1, help='number of nodes')
     parser.add_argument('--lr_init', type=float, default=0.001, help='initial learning rate')
+    parser.add_argument('--max_epochs', type=int, default=100, help='Maximum number of training epochs')
     parser.add_argument('--initial_epoch', type=int, default=0, help='starting epoch counter (for curricula / schedules; no checkpoint resume)')
     
     # Data-generation 
     parser.add_argument('--noise_prob', type=float, default=0.6, help='probability of sampling noise-only examples')
     parser.add_argument('--p_higher_init', type=float, default=0.9, help='initial probability of sampling higher snr range')
     parser.add_argument('--p_higher_fin', type=float, default=0.25, help='final probability of sampling higher snr range')
+    parser.add_argument('--snr_range_high', type=float, nargs=2, default=[10.0, 25.0], help='Target SNR range sampled when using the high/easy SNR bin')
+    parser.add_argument('--snr_range_low', type=float, nargs=2, default=[7.0, 15.0], help='Target SNR range sampled when using the low/harder SNR bin')
     parser.add_argument('--segment_length', type=int, default=4096, help='segment length fed to the model')
     parser.add_argument('--dim', type=int, default=1024, help='how many samples before merger at labeled as belonging to the signal class')
     parser.add_argument('--edge_buffer', type=int, default=2048, help='Number of samples trimmed from each side after whitening/filtering to reduce edge artifacts.')
@@ -404,7 +412,7 @@ def main():
     )
     
     trainer = Trainer(
-        max_epochs=100,
+        max_epochs=args.max_epochs,
         num_nodes=args.num_nodes,
         devices=devices,
         accelerator=accelerator,
@@ -430,6 +438,8 @@ def main():
         num_workers=args.num_workers,
         p_higher_init=args.p_higher_init,
         p_higher_fin=args.p_higher_fin,
+        snr_range_high=args.snr_range_high,
+        snr_range_low=args.snr_range_low,
         train_file=args.train_file,
         val_file=args.val_file,
         noise_is_whitened=args.noise_is_whitened,
