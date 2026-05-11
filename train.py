@@ -3,10 +3,6 @@ from __future__ import print_function
 import numpy as np
 from time import time
 import os
-import sys
-import gc
-import cProfile
-import math
 
 import h5py
 import yaml
@@ -16,21 +12,15 @@ import scipy.interpolate
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
-from torchvision import transforms
-import torch.nn.functional as F
 
 from torch.optim.lr_scheduler import ReduceLROnPlateau#, LambdaLR
 from pytorch_lightning import LightningModule, Trainer
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint,TQDMProgressBar#, Callback
-from pytorch_lightning.loggers import TensorBoardLogger
-#from torch.utils.data.distributed import DistributedSampler
 
 from model import *
 from data_generator import *
 
-print(torch.__version__)
+print(f"PyTorch version: {torch.__version__}", flush=True)
 
 import argparse
 
@@ -98,16 +88,15 @@ class LightningModel(LightningModule):
         return loss
 
         
-    def on_train_epoch_end(self):
-        train_dataset = self.trainer.datamodule.train_dataset
+    #def on_train_epoch_end(self):
+    #    train_dataset = self.trainer.datamodule.train_dataset
 
     def on_train_epoch_start(self):
         self.trainer.datamodule.train_dataset.epoch = self.current_epoch
-        print(f"[DEBUG] LightningModel → Epoch {self.current_epoch} — train_dataset.epoch = {self.trainer.datamodule.train_dataset.epoch}")
-
+        print(f"Epoch {self.current_epoch}: updated training dataset epoch counter.", flush=True)
         
-    def on_validation_epoch_end(self):
-        val_dataset = self.trainer.datamodule.val_dataset
+    #def on_validation_epoch_end(self):
+    #    val_dataset = self.trainer.datamodule.val_dataset
 
 
 
