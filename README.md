@@ -133,15 +133,20 @@ See [`docs/inference.md`](docs/inference.md) for notes on interpreting model sco
 ## Repository map
 
 ```text
-configs/example.yaml        Example config used by downloader and training
+.github/                    GitHub metadata and repository ownership files
+configs/example.yaml        Example configuration for downloading and training
+docs/                       Extended documentation
+example_data/signal/        Tiny example injection file
+example_data/noise/         Tiny example noise file and downloader diagnostics
+img/                        README and documentation images
+inference/                  Inference notebooks and related utilities
+scripts/submit_download.slurm  SLURM script for downloading noise data
+scripts/submit_train.slurm     SLURM script for launching training
 downloader.py               Downloads GWOSC strain windows and PSDs
 data_generator.py           Builds training windows from injections and noise
 model.py                    Attention-based detector model
 train.py                    PyTorch Lightning training script
 requirements.txt            Python dependencies
-scripts/submit_download.slurm
-scripts/submit_train.slurm
-docs/                       Extended documentation
 ```
 
 ## Data and checkpoints
