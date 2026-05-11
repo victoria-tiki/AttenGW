@@ -79,33 +79,34 @@ See [`legacy.md`](legacy.md) for the differences.
 <sup>Example SNR distribution after dataloader rescaling. The curriculum controls how often samples are drawn from the higher-SNR range during training.</sup>
 
 
-The raw-noise dataloader uses a simple SNR curriculum. During early epochs, injected examples are more likely to be drawn from the higher-SNR range. As training progresses, this probability decays, so the model sees more lower-SNR examples.
+The raw-noise dataloader uses a simple two-bin mixture schedule SNR curriculum. Injected examples are rescaled to a target matched-filter SNR sampled from one of two ranges. During early epochs, examples are more likely to be drawn from the higher-SNR range. As training progresses, this probability decays, so the model sees more lower-SNR examples.
 
-The two exposed curriculum parameters are:
+The exposed curriculum parameters are:
 
 ```yaml
 p_higher_init: 0.90
 p_higher_fin: 0.25
+snr_range_high: [10.0, 25.0]
+snr_range_low: [7.0, 15.0]
 ```
 
-`p_higher_init` is the initial probability of sampling from the higher-SNR range. `p_higher_fin` is the floor this probability decays toward. With the current implementation, the decay is set internally to happen over the first 10 epochs.
+`snr_range_high` and `snr_range_low` define the target SNR ranges used for injected training examples. At each epoch, the dataloader samples from `snr_range_high` with probability `p_higher`; otherwise it samples from `snr_range_low`.
 
-The current raw-noise dataloader uses two hard-coded target-SNR ranges:
+`p_higher_init` is the initial value of `p_higher`, and `p_higher_fin` is the floor it decays toward. With the current implementation, the decay scale is set internally so the transition happens over roughly the first 10 epochs.
 
-```text
-higher-SNR range: 10–25
-lower-SNR range:   7–15
-```
+Change `snr_range_high` and `snr_range_low` if you want different target-SNR ranges. Change `p_higher_init` and `p_higher_fin` if you only want to change how often the higher-SNR range is sampled.
 
-If you want to change the SNR ranges themselves, edit them in `data_generator.py`. If you only want to change how often the higher-SNR range is sampled, change `p_higher_init` and `p_higher_fin` in the YAML config.
+![Example SNR curriculum](../img/curriculum_snr_example.png)
+
+*Example target-SNR curriculum for a two-bin mixture schedule with `high_range=[15,25]`, `low_range=[7,13]`, `p_high_init=0.90`, and `p_high_final=0.15`. The dashed line shows the expected target SNR, while the shaded regions indicate the 25–75% and 10–90% sampled target-SNR ranges across epochs.*
 
 ## What to change first
 
 Most training issues should be addressed in this order:
 
-1. Check the diagnostics and preview plot.
+1. Check the diagnostics and preview plot to evaluate dataset integrity.
 2. Adjust `noise_prob`.
-3. Adjust the curriculum probabilities.
+3. Adjust the curriculum parameters (`snr_range_high`, `snr_range_low`, `p_higher_init`, `p_higher_fin`).
 4. Adjust learning rate only if the loss behavior suggests optimization trouble.
 5. Change preprocessing/band settings if the data diagnostics suggest a mismatch.
 
