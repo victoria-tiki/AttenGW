@@ -17,7 +17,7 @@ These files are intended only for smoke tests and basic end-to-end checks. They 
 
 The figure below shows example training samples constructed from these two data components. The first three rows contain injected gravitational-wave signals (orange) embedded in detector noise (blue), while the final row is a noise-only example. 
 
-![Example training batch preview](img/training_batch_preview8.png)
+![Example training batch preview](../img/training_batch_preview8.png)
 
 ## Injection file format
 
