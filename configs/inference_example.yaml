@@ -13,8 +13,8 @@ checkpoint:
 
 
 input:
-  # Downloader-produced HDF5 file.
-  # Expected datasets:
+  # One downloader-produced HDF5 file OR a glob pattern.
+  # Expected datasets in file(s):
   #   /strain_H1
   #   /strain_L1
   #   /psd_H1
@@ -24,8 +24,11 @@ input:
   # Expected attrs include:
   #   gps_start, gps_end, mode, whiten, sample_rate,
   #   band_low, band_high, bandpass_order, psd_seglen_s
-  file: /path/to/noise_or_signal_file.hdf5
-
+  
+  # Examples:
+  #   /path/to/noise_raw_1248842661_1248846757.hdf5  (1 file to run inference on)
+  #   /path/to/noise/*.hdf5  (glob file pattern to run inference on)
+  path: /path/to/noise_or_signal_file.hdf5
 
 output:
   # Inference outputs are written here.
@@ -34,6 +37,9 @@ output:
 
   # If true, saves plots to output_dir/plots/.
   make_plot: true
+
+  # If true, only saves plots for threshold/width combinations where triggers are found.
+  plot_only_if_triggers: false
 
   # If true, saves raw model predictions as .npz files.
   # Usually leave false unless debugging.
