@@ -12,8 +12,7 @@ The basic workflow is:
 2. edit `configs/example.yaml`,
 3. download real detector noise,
 4. train on user-provided waveform injections,
-5. use the inference notebook to inspect predictions from a trained checkpoint.
-
+5. run inference on downloader-produced HDF5 files using a trained checkpoint.
 --- 
 
 ## Installation
@@ -123,9 +122,40 @@ See [`docs/config.md`](docs/config.md) for an overview of training parameters to
 
 ## Inference
 
-After training, use the inference notebook to load a checkpoint and visualize predictions on selected examples.
+After training, use the inference script to run a trained checkpoint on a downloader-produced HDF5 file and report human-readable trigger times.
 
-See [`docs/inference.md`](docs/inference.md) for notes on interpreting model scores and peak-finding settings.
+First edit:
+
+```bash
+configs/inference_example.yaml
+```
+At minimum, set:
+```
+checkpoint:
+  run_dir: /path/to/checkpoints/latest_run_id
+  ckpt_path:
+
+input:
+  file: /path/to/noise_or_signal_file.hdf5
+
+output:
+  output_dir: /path/to/inference_outputs
+
+```
+`checkpoint.run_dir` should point to a training run folder containing `config.yaml` (will be saved automatically by the train script) and one or more model `.ckpt` files. If `checkpoint.ckpt_path` is left blank, the inference script will use the newest checkpoint in the run folder.
+
+Run locally with:
+
+```
+python inference/infer.py --config configs/inference_example.yaml
+```
+Optional SLURM usage:
+
+```
+sbatch scripts/submit_infer.slurm
+```
+
+The script saves trigger summaries and optional diagnostic plots to the configured output directory. See [`docs/inference.md`](docs/inference.md) for notes on interpreting model scores and peak-finding settings.
 
 ---
 
@@ -135,13 +165,16 @@ See [`docs/inference.md`](docs/inference.md) for notes on interpreting model sco
 ```text
 .github/                    GitHub metadata and repository ownership files
 configs/example.yaml        Example configuration for downloading and training
+configs/inference_example.yaml    Example configuration for inference
+inference/infer.py                Basic inference script for finding triggers
+inference/inference_utils.py      Shared inference utilities
 docs/                       Extended documentation
 example_data/signal/        Tiny example injection file
 example_data/noise/         Tiny example noise file and downloader diagnostics
 img/                        README and documentation images
-inference/                  Inference notebooks and related utilities
 scripts/submit_download.slurm  SLURM script for downloading noise data
 scripts/submit_train.slurm     SLURM script for launching training
+scripts/submit_infer.slurm     SLURM script for running inference
 downloader.py               Downloads GWOSC strain windows and PSDs
 data_generator.py           Builds training windows from injections and noise
 model.py                    Attention-based detector model
