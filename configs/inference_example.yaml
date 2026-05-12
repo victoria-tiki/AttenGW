@@ -73,7 +73,25 @@ inference:
   # Merge triggers from different offsets if they are closer than this.
   merge_tolerance_s: 0.25
 
+noise_similarity:
+  # Optional. If blank/missing, inference still runs and the summary notes that
+  # training noise files were not provided.
+  training_noise_path:
 
+  # Number of nearest training files used to summarize ASD drift.
+  k_nearest: 3
+
+  # Smoothing window for log-ASD curves, in frequency bins.
+  # Use an odd integer. Set to 1 for no smoothing.
+  smooth_bins: 9
+
+  # Prepared-strain tail diagnostic.
+  tail_window_s: 1.0
+  tail_threshold: 5.0
+
+  # Optional diagnostic only; not part of the main ASD drift score.
+  include_wasserstein: true
+  
 sanity_checks:
   # If strict is false, mismatches print clear warnings and continue.
   # If strict is true, mismatches raise an error.
