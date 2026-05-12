@@ -1,0 +1,77 @@
+# Basic AttenGW inference example.
+# This runs inference on one downloader-produced HDF5 file and prints human-readable triggers.
+
+checkpoint:
+  # Training run folder produced by scripts/submit_train.slurm.
+  # This folder should contain:
+  #   config.yaml
+  #   one or more .ckpt files
+  run_dir: /path/to/checkpoints/train_job_123456
+
+  # Optional. Leave blank to automatically use the newest .ckpt in run_dir.
+  ckpt_path:
+
+
+input:
+  # Downloader-produced HDF5 file.
+  # Expected datasets:
+  #   /strain_H1
+  #   /strain_L1
+  #   /psd_H1
+  #   /psd_L1
+  #   /freqs
+  #
+  # Expected attrs include:
+  #   gps_start, gps_end, mode, whiten, sample_rate,
+  #   band_low, band_high, bandpass_order, psd_seglen_s
+  file: /path/to/noise_or_signal_file.hdf5
+
+
+output:
+  # Inference outputs are written here.
+  # The SLURM submission script creates one infer_job_<jobid>/ subfolder inside this directory.
+  output_dir: /path/to/inference_outputs
+
+  # If true, saves plots to output_dir/plots/.
+  make_plot: true
+
+  # If true, saves raw model predictions as .npz files.
+  # Usually leave false unless debugging.
+  save_predictions: false
+
+
+inference:
+  device: auto
+
+  # Model/window settings. Usually leave unchanged if using the provided model.
+  segment_length: 4096
+  stride: 4096
+  offsets: [0, 1023, 2047, 3070]
+
+  # Edge samples trimmed after whitening raw files to reduce whitening artifacts.
+  # For pre-whitened files, this trim is not applied.
+  edge_buffer: 2048
+
+  batch_size: 64
+
+  # Multiple thresholds and widths can be evaluated in one run.
+  thresholds: [0.9, 0.98, 0.998]
+  min_width_samples: [512, 1024, 2048]
+
+  # Peak-finding helper.
+  # The actual mean cut is:
+  #   max(0, min(mean_cap, threshold - mean_margin))
+  mean_margin: 0.05
+  mean_cap: 0.95
+
+  # Merge triggers from different offsets if they are closer than this.
+  merge_tolerance_s: 0.25
+
+
+sanity_checks:
+  # If strict is false, mismatches print clear warnings and continue.
+  # If strict is true, mismatches raise an error.
+  strict: false
+  check_sample_rate: true
+  check_whitened_state: true
+  check_bandpass: true
