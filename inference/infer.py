@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import argparse
 import os
+import glob
 from pathlib import Path
 
 import numpy as np
@@ -21,7 +22,7 @@ from inference_utils import (
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Run basic AttenGW inference on one downloader HDF5 file."
+        description="Run basic AttenGW inference on one or more downloader HDF5 files."
     )
 
     parser.add_argument("--config", type=str, required=True,
@@ -32,8 +33,10 @@ def parse_args():
                         help="Override checkpoint.run_dir from the YAML.")
     parser.add_argument("--ckpt_path", type=str, default=None,
                         help="Override checkpoint.ckpt_path from the YAML.")
+    parser.add_argument("--input_path", type=str, default=None,
+                        help="Override input.path from the YAML. Can be one file or a glob.")
     parser.add_argument("--input_file", type=str, default=None,
-                        help="Override input.file from the YAML.")
+                        help="Backward-compatible alias for --input_path.")
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Override output.output_dir from the YAML.")
 
@@ -52,11 +55,12 @@ def parse_args():
                         help="Force output.make_plot=True.")
     parser.add_argument("--no_plot", action="store_true",
                         help="Force output.make_plot=False.")
+    parser.add_argument("--plot_only_if_triggers", action="store_true",
+                        help="Only save plots for threshold/width combinations with triggers.")
     parser.add_argument("--save_predictions", action="store_true",
                         help="Force output.save_predictions=True.")
 
     return parser.parse_args()
-
 
 def print_file_summary(input_file, attrs, prep_info):
     print("\nInput file")
@@ -69,7 +73,27 @@ def print_file_summary(input_file, attrs, prep_info):
     print(f"  sample_rate: {prep_info['sample_rate']} Hz")
     print(f"  trim_samples: {prep_info['trim_samples']}")
 
+def resolve_input_files(input_path):
+    """
+    Resolve one input path or glob pattern into a sorted list of files.
+    """
+    matches = sorted(glob.glob(input_path))
+    if matches:
+        return matches
+
+    if os.path.exists(input_path):
+        return [input_path]
+
+    raise FileNotFoundError(f"No input files found for: {input_path}")
+
+
 def format_all_results_text(input_file, run_dir, ckpt_path, attrs, prep_info, all_results):
+    """
+    Human-readable text output for one input file.
+
+    Summary comes first as a compact threshold/width grid, followed by detailed
+    trigger information.
+    """
     lines = []
 
     lines.append("=" * 100)
@@ -91,23 +115,19 @@ def format_all_results_text(input_file, run_dir, ckpt_path, attrs, prep_info, al
     lines.append("-" * 100)
     lines.append("TRIGGER COUNT SUMMARY")
     lines.append("-" * 100)
-    lines.append(
-        "Each cell shows: number of triggers; first up to 3 peak samples."
-    )
+    lines.append("Each cell shows: number of triggers; first up to 3 peak samples.")
     lines.append("")
 
-    thresholds = sorted({k[0] for k in all_results.keys()})
-    widths = sorted({k[1] for k in all_results.keys()})
+    thresholds = sorted({key[0] for key in all_results.keys()})
+    widths = sorted({key[1] for key in all_results.keys()})
 
-    # Header
-    col_width = 26
+    col_width = 28
     header = f"{'threshold':>12}"
     for width in widths:
         header += f" | {'width=' + str(width):^{col_width}}"
     lines.append(header)
     lines.append("-" * len(header))
 
-    # Rows
     for threshold in thresholds:
         row = f"{threshold:>12}"
         for width in widths:
@@ -156,6 +176,42 @@ def format_all_results_text(input_file, run_dir, ckpt_path, attrs, prep_info, al
 
     return "\n".join(lines) + "\n"
 
+
+def format_all_files_summary_text(file_summaries):
+    """
+    Compact summary across all input files.
+    """
+    lines = []
+    lines.append("=" * 100)
+    lines.append("ATTENGW MULTI-FILE INFERENCE SUMMARY")
+    lines.append("=" * 100)
+    lines.append("Each row is one input file and one threshold/width setting.")
+    lines.append("first_samples lists the first up to 3 trigger peak samples.")
+    lines.append("")
+
+    header = (
+        f"{'file':<45} | {'threshold':>9} | {'width':>6} | "
+        f"{'n_trig':>6} | {'first_samples':<30}"
+    )
+    lines.append(header)
+    lines.append("-" * len(header))
+
+    for item in file_summaries:
+        file_name = Path(item["input_file"]).name
+        if len(file_name) > 45:
+            file_name = "..." + file_name[-42:]
+
+        first_samples = ",".join(str(x) for x in item["first_samples"])
+        lines.append(
+            f"{file_name:<45} | "
+            f"{item['threshold']:>9} | "
+            f"{item['width']:>6} | "
+            f"{item['n_triggers']:>6} | "
+            f"{first_samples:<30}"
+        )
+
+    return "\n".join(lines) + "\n"
+
 def print_triggers(threshold, width, triggers):
     print("\n" + "=" * 80)
     print(f"Threshold {threshold}, min_width_samples {width}")
@@ -179,41 +235,45 @@ def print_triggers(threshold, width, triggers):
         print(f"  offset stream: {trig['offset']} samples")
         print(f"  mean cut used: {trig['mean_cut']:.6f}")
 
-
 def main():
     args = parse_args()
     cfg = load_yaml(args.config)
-    
+
+    # Apply CLI overrides. YAML remains the default source of truth.
     if args.checkpoint_run_dir is not None:
         cfg["checkpoint"]["run_dir"] = args.checkpoint_run_dir
-    
+
     if args.ckpt_path is not None:
         cfg["checkpoint"]["ckpt_path"] = args.ckpt_path
-    
-    if args.input_file is not None:
-        cfg["input"]["file"] = args.input_file
-    
+
+    input_override = args.input_path or args.input_file
+    if input_override is not None:
+        cfg["input"]["path"] = input_override
+
     if args.output_dir is not None:
         cfg["output"]["output_dir"] = args.output_dir
-    
+
     if args.thresholds is not None:
         cfg["inference"]["thresholds"] = args.thresholds
-    
+
     if args.min_width_samples is not None:
         cfg["inference"]["min_width_samples"] = args.min_width_samples
-    
+
     if args.batch_size is not None:
         cfg["inference"]["batch_size"] = args.batch_size
-    
+
     if args.device is not None:
         cfg["inference"]["device"] = args.device
-    
+
     if args.make_plot:
         cfg["output"]["make_plot"] = True
-    
+
     if args.no_plot:
         cfg["output"]["make_plot"] = False
-    
+
+    if args.plot_only_if_triggers:
+        cfg["output"]["plot_only_if_triggers"] = True
+
     if args.save_predictions:
         cfg["output"]["save_predictions"] = True
 
@@ -221,107 +281,142 @@ def main():
     ckpt_path = find_checkpoint(run_dir, cfg["checkpoint"].get("ckpt_path"))
     training_config = load_training_config(run_dir)
 
-    input_file = cfg["input"]["file"]
+    # Backward-compatible: allow either input.path or old input.file.
+    input_cfg = cfg["input"]
+    input_path = input_cfg.get("path") or input_cfg.get("file")
+    if input_path is None:
+        raise ValueError("Inference config must define input.path or input.file.")
+
+    input_files = resolve_input_files(input_path)
+
     output_dir = cfg["output"]["output_dir"]
     os.makedirs(output_dir, exist_ok=True)
 
     device = choose_device(cfg["inference"].get("device", "auto"))
     print(f"Using device: {device}")
+    print(f"Resolved {len(input_files)} input file(s).")
 
     model = load_model_from_checkpoint(ckpt_path, device)
-
-    data, attrs = read_downloader_hdf5(input_file)
-    check_metadata_compatibility(training_config, attrs, cfg.get("sanity_checks", {}))
-
-    strain_L1, strain_H1, prep_info = prepare_strain_for_inference(
-        data=data,
-        attrs=attrs,
-        training_config=training_config,
-        inference_config=cfg,
-    )
-
-    print_file_summary(input_file, attrs, prep_info)
-    print("\nModel")
-    print(f"  training run: {run_dir}")
-    print(f"  checkpoint: {ckpt_path}")
-    print(f"  prepared samples: {len(strain_L1)}")
 
     inf = cfg["inference"]
     thresholds = inf["thresholds"]
     widths = inf["min_width_samples"]
 
-    all_results = {}
+    multi_file_summaries = []
 
-    for threshold in thresholds:
-        for width in widths:
-            triggers, pred_by_offset = triggers_for_threshold_and_width(
-                model=model,
-                strain_L1=strain_L1,
-                strain_H1=strain_H1,
-                sample_rate=float(prep_info["sample_rate"]),
-                effective_gps_start=float(prep_info["effective_gps_start"]),
-                segment_length=int(inf["segment_length"]),
-                stride=int(inf["stride"]),
-                offsets=inf["offsets"],
-                batch_size=int(inf["batch_size"]),
-                threshold=float(threshold),
-                min_width_samples=int(width),
-                mean_margin=float(inf.get("mean_margin", 0.05)),
-                mean_cap=float(inf.get("mean_cap", 0.95)),
-                merge_tolerance_s=float(inf.get("merge_tolerance_s", 0.25)),
-                device=device,
-            )
+    for file_idx, input_file in enumerate(input_files, start=1):
+        print("\n" + "#" * 100)
+        print(f"Processing file {file_idx}/{len(input_files)}: {input_file}")
+        print("#" * 100)
 
-            key = f"thr_{threshold}_width_{width}"
-            all_results[(float(threshold), int(width))] = triggers
-            print_triggers(threshold, width, triggers)
-            
+        data, attrs = read_downloader_hdf5(input_file)
+        check_metadata_compatibility(training_config, attrs, cfg.get("sanity_checks", {}))
 
-            if cfg["output"].get("make_plot", False):
-                stem = Path(input_file).stem
-                plots_dir = os.path.join(output_dir, "plots")
-                os.makedirs(plots_dir, exist_ok=True)
-            
-                plot_path = os.path.join(plots_dir, f"{stem}_{key}_prediction.png")
-                plot_prediction_summary(
-                    strain_L1=strain_L1,
-                    strain_H1=strain_H1,
-                    pred_by_offset=pred_by_offset,
-                    triggers=triggers,
-                    sample_rate=float(prep_info["sample_rate"]),
-                    output_path=plot_path,
-                    title=f"{stem}: threshold={threshold}, width={width}",
-                )
-                print(f"Saved plot: {plot_path}")
-
-            if cfg["output"].get("save_predictions", False):
-                stem = Path(input_file).stem
-                pred_path = os.path.join(output_dir, f"{stem}_{key}_predictions.npz")
-                np.savez_compressed(
-                    pred_path,
-                    **{f"offset_{k}": v for k, v in pred_by_offset.items()},
-                )
-                print(f"Saved predictions: {pred_path}")
-                
-    stem = Path(input_file).stem
-    summary_txt = os.path.join(output_dir, f"{stem}_inference_summary.txt")
-
-    with open(summary_txt, "w") as f:
-        f.write(
-            format_all_results_text(
-                input_file=input_file,
-                run_dir=run_dir,
-                ckpt_path=ckpt_path,
-                attrs=attrs,
-                prep_info=prep_info,
-                all_results=all_results,
-            )
+        strain_L1, strain_H1, prep_info = prepare_strain_for_inference(
+            data=data,
+            attrs=attrs,
+            training_config=training_config,
+            inference_config=cfg,
         )
 
-    print(f"\nSaved combined inference summary: {summary_txt}")
+        print_file_summary(input_file, attrs, prep_info)
+        print("\nModel")
+        print(f"  training run: {run_dir}")
+        print(f"  checkpoint: {ckpt_path}")
+        print(f"  prepared samples: {len(strain_L1)}")
+
+        all_results = {}
+
+        for threshold in thresholds:
+            for width in widths:
+                triggers, pred_by_offset = triggers_for_threshold_and_width(
+                    model=model,
+                    strain_L1=strain_L1,
+                    strain_H1=strain_H1,
+                    sample_rate=float(prep_info["sample_rate"]),
+                    effective_gps_start=float(prep_info["effective_gps_start"]),
+                    segment_length=int(inf["segment_length"]),
+                    stride=int(inf["stride"]),
+                    offsets=inf["offsets"],
+                    batch_size=int(inf["batch_size"]),
+                    threshold=float(threshold),
+                    min_width_samples=int(width),
+                    mean_margin=float(inf.get("mean_margin", 0.05)),
+                    mean_cap=float(inf.get("mean_cap", 0.95)),
+                    merge_tolerance_s=float(inf.get("merge_tolerance_s", 0.25)),
+                    device=device,
+                )
+
+                key = f"thr_{threshold}_width_{width}"
+                all_results[(float(threshold), int(width))] = triggers
+
+                print_triggers(threshold, width, triggers)
+
+                multi_file_summaries.append(
+                    {
+                        "input_file": input_file,
+                        "threshold": float(threshold),
+                        "width": int(width),
+                        "n_triggers": len(triggers),
+                        "first_samples": [t["peak_sample"] for t in triggers[:3]],
+                    }
+                )
+
+                should_plot = cfg["output"].get("make_plot", False)
+                if cfg["output"].get("plot_only_if_triggers", False) and not triggers:
+                    should_plot = False
+
+                if should_plot:
+                    stem = Path(input_file).stem
+                    plots_dir = os.path.join(output_dir, "plots")
+                    os.makedirs(plots_dir, exist_ok=True)
+
+                    plot_path = os.path.join(plots_dir, f"{stem}_{key}_prediction.png")
+                    plot_prediction_summary(
+                        strain_L1=strain_L1,
+                        strain_H1=strain_H1,
+                        pred_by_offset=pred_by_offset,
+                        triggers=triggers,
+                        sample_rate=float(prep_info["sample_rate"]),
+                        output_path=plot_path,
+                        title=f"{stem}: threshold={threshold}, width={width}",
+                    )
+                    print(f"Saved plot: {plot_path}")
+
+                if cfg["output"].get("save_predictions", False):
+                    stem = Path(input_file).stem
+                    pred_path = os.path.join(output_dir, f"{stem}_{key}_predictions.npz")
+                    np.savez_compressed(
+                        pred_path,
+                        **{f"offset_{k}": v for k, v in pred_by_offset.items()},
+                    )
+                    print(f"Saved predictions: {pred_path}")
+
+        stem = Path(input_file).stem
+        summary_txt = os.path.join(output_dir, f"{stem}_inference_summary.txt")
+
+        with open(summary_txt, "w") as f:
+            f.write(
+                format_all_results_text(
+                    input_file=input_file,
+                    run_dir=run_dir,
+                    ckpt_path=ckpt_path,
+                    attrs=attrs,
+                    prep_info=prep_info,
+                    all_results=all_results,
+                )
+            )
+
+        print(f"\nSaved inference summary: {summary_txt}")
+
+    # If multiple files were processed, also save one compact cross-file summary.
+    if len(input_files) > 1:
+        all_files_txt = os.path.join(output_dir, "all_files_inference_summary.txt")
+        with open(all_files_txt, "w") as f:
+            f.write(format_all_files_summary_text(multi_file_summaries))
+        print(f"\nSaved multi-file summary: {all_files_txt}")
 
     print("\nInference finished.")
-
 
 if __name__ == "__main__":
     main()
