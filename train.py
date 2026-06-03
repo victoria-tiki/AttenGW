@@ -93,8 +93,13 @@ class LightningModel(LightningModule):
 
     def on_train_epoch_start(self):
         self.trainer.datamodule.train_dataset.epoch = self.current_epoch
-        print(f"Epoch {self.current_epoch}: updated training dataset epoch counter.", flush=True)
-        
+
+        lr = self.trainer.optimizers[0].param_groups[0]["lr"]
+        print(
+            f"Epoch {self.current_epoch}: updated training dataset epoch counter. "
+            f"Learning rate = {lr:.6e}",
+            flush=True,
+        )        
     #def on_validation_epoch_end(self):
     #    val_dataset = self.trainer.datamodule.val_dataset
 
