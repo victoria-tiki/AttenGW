@@ -137,6 +137,20 @@ These options control lightweight quality checks applied while downloading detec
 
 <sup>Example PSD diagnostic plot saved with a downloaded noise window.</sup>
 
+## `model`
+
+```yaml
+model:
+  name: model_tcn_earlyfusion
+  kwargs: {}
+```
+
+`model.name` selects which model definition is used by `train.py`. The default is `model_tcn_earlyfusion`.
+
+Available models and model-specific notes are listed in [`models.md`](models.md). All model files live in `models/` and expose a `full_module` class/function.
+
+`model.kwargs` can be left as `{}` for standard runs. Use it when testing a model hyperparameter variant.
+
 
 ## `training`
 
