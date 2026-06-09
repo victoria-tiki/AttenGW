@@ -65,6 +65,21 @@ download:
   max_raw_std:
   min_raw_std:
 
+model:
+# Available models:
+#   model_hdcn_crossattn
+#   model_hdcn_graph
+#   model_tcn_earlyfusion
+#   model_tcn_sepstems_simplefusion
+#   model_tcn_sepstems_interaction
+#   model_tcn_temporalattn_gated
+#   model_tcn_stft
+#   model_bimamba
+#
+# All model files should live in models/ and define full_module.
+# Keep kwargs as {} unless testing a model hyperparameter variant.
+  name: model_tcn_earlyfusion
+  kwargs: {}
 
 training:
   # Commonly changed.
