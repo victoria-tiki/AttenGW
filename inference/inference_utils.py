@@ -13,13 +13,14 @@ import yaml
 from astropy.time import Time
 from scipy import signal
 from torch.utils.data import DataLoader, Dataset
+from scipy.stats import wasserstein_distance
 
 # Allow running as: python inference/infer.py
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from model import full_module
+import importlib
 from data_generator import GWDataset, whiten
 
 
@@ -60,12 +61,62 @@ def choose_device(device_setting: str = "auto") -> torch.device:
     return torch.device(device_setting)
 
 
-def load_model_from_checkpoint(ckpt_path: str, device: torch.device) -> torch.nn.Module:
-    """
-    Load full_module from a Lightning or plain PyTorch checkpoint.
+AVAILABLE_MODELS = {
+    "model_hdcn_crossattn",
+    "model_hdcn_graph",
+    "model_tcn_earlyfusion",
+    "model_tcn_sepstems_simplefusion",
+    "model_tcn_sepstems_interaction",
+    "model_tcn_temporalattn_gated",
+    "model_tcn_stft",
+    "model_bimamba",
+}
 
-    Training checkpoints from Lightning usually store weights under "state_dict"
-    with a "model." prefix, because LightningModel contains self.model = full_module().
+
+def build_model_from_training_config(
+    training_config: Optional[Dict[str, Any]],
+) -> torch.nn.Module:
+    if training_config is None:
+        raise ValueError(
+            "No training config was found in the run directory. "
+            "Cannot determine which model architecture to load."
+        )
+
+    model_cfg = training_config.get("model", {})
+    model_name = model_cfg.get("name", "model_tcn_earlyfusion")
+    model_kwargs = model_cfg.get("kwargs", {})
+
+    if model_name not in AVAILABLE_MODELS:
+        raise ValueError(
+            f"Unknown model '{model_name}' in saved training config. "
+            f"Available models are: {', '.join(sorted(AVAILABLE_MODELS))}"
+        )
+
+    module = importlib.import_module(f"models.{model_name}")
+
+    if not hasattr(module, "full_module"):
+        raise AttributeError(
+            f"models.{model_name} does not define full_module"
+        )
+
+    print(f"Building model from saved config: {model_name}")
+    if model_kwargs:
+        print(f"Model kwargs: {model_kwargs}")
+
+    return module.full_module(**model_kwargs)
+
+
+def load_model_from_checkpoint(
+    ckpt_path: str,
+    device: torch.device,
+    training_config: Optional[Dict[str, Any]],
+) -> torch.nn.Module:
+    """
+    Load the model architecture named in the saved training config, then load
+    weights from a Lightning or plain PyTorch checkpoint.
+
+    Lightning checkpoints usually store weights under "state_dict" with a
+    "model." prefix, because LightningModel contains self.model = full_module().
     """
     print(f"Loading checkpoint: {ckpt_path}")
     ckpt = torch.load(ckpt_path, map_location="cpu")
@@ -75,7 +126,7 @@ def load_model_from_checkpoint(ckpt_path: str, device: torch.device) -> torch.nn
     else:
         state_dict = ckpt
 
-    model = full_module()
+    model = build_model_from_training_config(training_config)
     model_state = model.state_dict()
 
     cleaned = {}
@@ -295,19 +346,35 @@ def prepare_strain_for_inference(
 
     # Match the simple inference utilities: remove DC and normalize each detector.
     # This makes the scale manageable for both raw-whitened and pre-whitened inputs.
-    prep_L1 = prep_L1 - np.mean(prep_L1)
-    prep_H1 = prep_H1 - np.mean(prep_H1)
+    shared = (training_config or {}).get("shared", {})
+    checkpoint_noise_is_whitened = bool(shared.get("noise_is_whitened", False))
 
-    std_L1 = np.std(prep_L1)
-    std_H1 = np.std(prep_H1)
-    if std_L1 > 0:
-        prep_L1 = prep_L1 / std_L1
-    if std_H1 > 0:
-        prep_H1 = prep_H1 / std_H1
+    # For the new raw-noise training path, training mean-centers each 4096-sample
+    # window and does not divide by its std. We therefore leave the long stream
+    # unnormalized here and apply per-window mean subtraction in WindowDataset.
+    #
+    # For legacy checkpoints trained with pre-whitened noise, keep std normalization
+    # for compatibility with the old data path.
+    std_normalization = checkpoint_noise_is_whitened
+
+    if std_normalization:
+        prep_L1 = prep_L1 - np.mean(prep_L1)
+        prep_H1 = prep_H1 - np.mean(prep_H1)
+
+        std_L1 = np.std(prep_L1)
+        std_H1 = np.std(prep_H1)
+        if std_L1 > 0:
+            prep_L1 = prep_L1 / std_L1
+        if std_H1 > 0:
+            prep_H1 = prep_H1 / std_H1
 
     info = {
         "sample_rate": sample_rate,
         "file_whitened": file_whitened,
+        "checkpoint_noise_is_whitened": checkpoint_noise_is_whitened,
+        "whitened_during_inference": not file_whitened,
+        "mean_subtraction": "per_window",
+        "std_normalization": bool(std_normalization),
         "trim_samples": trim_samples,
         "effective_gps_start": float(attrs.get("gps_start", 0.0)) + trim_samples / sample_rate,
         "gps_end": float(attrs.get("gps_end", np.nan)),
@@ -342,7 +409,7 @@ class WindowDataset(Dataset):
     def __len__(self) -> int:
         return len(self.starts)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx):
         start = int(self.starts[idx])
         end = start + self.segment_length
 
@@ -350,6 +417,10 @@ class WindowDataset(Dataset):
             [self.strain_L1[start:end], self.strain_H1[start:end]],
             axis=-1,
         ).astype(np.float32)
+
+        # Match the new/raw training path: mean-center each detector window.
+        x[:, 0] -= np.mean(x[:, 0])
+        x[:, 1] -= np.mean(x[:, 1])
 
         return torch.from_numpy(x), start
 
@@ -650,8 +721,592 @@ def plot_prediction_summary(
     fig.suptitle(title)
     plt.savefig(output_path)
     plt.close(fig)
+    
+def resolve_training_noise_files(training_noise_path: Optional[str]) -> List[str]:
+    """
+    Resolve optional training-noise path for similarity metrics.
+
+    Accepts:
+      - None / "" -> []
+      - directory -> sorted *.hdf5 files inside it
+      - glob pattern -> sorted matching files
+      - single file -> [file]
+    """
+    if not training_noise_path:
+        return []
+
+    path = str(training_noise_path)
+
+    if os.path.isdir(path):
+        return sorted(glob.glob(os.path.join(path, "*.hdf5")))
+
+    matches = sorted(glob.glob(path))
+    if matches:
+        return matches
+
+    if os.path.exists(path):
+        return [path]
+
+    print(f"WARNING: no training noise files found for noise_similarity.training_noise_path={path}")
+    return []
 
 
+def _as_float_attr(attrs: Dict[str, Any], key: str, default: float) -> float:
+    value = attrs.get(key, default)
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _smooth_1d(x: np.ndarray, smooth_bins: int) -> np.ndarray:
+    smooth_bins = int(smooth_bins)
+    if smooth_bins <= 1:
+        return x
+
+    # Force odd window length for symmetric smoothing.
+    if smooth_bins % 2 == 0:
+        smooth_bins += 1
+
+    if len(x) < smooth_bins:
+        return x
+
+    kernel = np.ones(smooth_bins, dtype=np.float64) / smooth_bins
+    return np.convolve(x, kernel, mode="same")
+
+
+def _read_noise_psd_features(
+    path: str,
+    similarity_config: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """
+    Read saved PSDs and produce smoothed log-ASD curves for H1/L1.
+
+    Uses the HDF5 attrs band_low/band_high when available.
+    """
+    try:
+        data, attrs = read_downloader_hdf5(path)
+    except Exception as exc:
+        print(f"WARNING: could not read noise file for ASD metrics: {path}: {exc}")
+        return None
+
+    required = ["psd_H1", "psd_L1", "freqs"]
+    missing = [key for key in required if key not in data]
+    if missing:
+        print(f"WARNING: skipping ASD features for {path}; missing {missing}")
+        return None
+
+    freqs = np.asarray(data["freqs"], dtype=np.float64).squeeze()
+    psd_H1 = np.asarray(data["psd_H1"], dtype=np.float64).squeeze()
+    psd_L1 = np.asarray(data["psd_L1"], dtype=np.float64).squeeze()
+
+    n = min(len(freqs), len(psd_H1), len(psd_L1))
+    freqs = freqs[:n]
+    psd_H1 = psd_H1[:n]
+    psd_L1 = psd_L1[:n]
+
+    band_low = _as_float_attr(attrs, "band_low", float(np.nanmin(freqs)))
+    band_high = _as_float_attr(attrs, "band_high", float(np.nanmax(freqs)))
+
+    psd_floor = 1e-48
+    psd_H1 = np.maximum(psd_H1, psd_floor)
+    psd_L1 = np.maximum(psd_L1, psd_floor)
+
+    # log-ASD = 0.5 * log(PSD)
+    logasd_H1 = 0.5 * np.log(psd_H1)
+    logasd_L1 = 0.5 * np.log(psd_L1)
+
+    smooth_bins = int(similarity_config.get("smooth_bins", 9))
+    logasd_H1 = _smooth_1d(logasd_H1, smooth_bins)
+    logasd_L1 = _smooth_1d(logasd_L1, smooth_bins)
+
+    return {
+        "path": path,
+        "attrs": attrs,
+        "freqs": freqs,
+        "band_low": band_low,
+        "band_high": band_high,
+        "logasd_H1": logasd_H1,
+        "logasd_L1": logasd_L1,
+    }
+
+
+def _asd_distance_from_features(a: Dict[str, Any], b: Dict[str, Any]) -> float:
+    """
+    Mean absolute smoothed log-ASD distance, averaged over H1/L1.
+
+    Uses the overlapping HDF5 band attrs and interpolates b onto a's frequency grid.
+    """
+    low = max(float(a["band_low"]), float(b["band_low"]))
+    high = min(float(a["band_high"]), float(b["band_high"]))
+
+    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
+        return float("nan")
+
+    freqs_a = np.asarray(a["freqs"])
+    freqs_b = np.asarray(b["freqs"])
+
+    mask = (freqs_a >= low) & (freqs_a <= high)
+    if np.count_nonzero(mask) < 2:
+        return float("nan")
+
+    f = freqs_a[mask]
+
+    distances = []
+    for det in ["H1", "L1"]:
+        ya = np.asarray(a[f"logasd_{det}"])[mask]
+        yb = np.interp(f, freqs_b, np.asarray(b[f"logasd_{det}"]))
+        distances.append(float(np.mean(np.abs(ya - yb))))
+
+    return float(np.mean(distances))
+
+
+def _prepared_tail_window_rate(
+    strain_L1: np.ndarray,
+    strain_H1: np.ndarray,
+    sample_rate: float,
+    window_s: float,
+    threshold: float,
+) -> float:
+    """
+    Fraction of windows where either detector has max(abs(x)) > threshold.
+
+    This should be computed on the long prepared stream used by inference.
+    """
+    window_n = int(round(float(window_s) * float(sample_rate)))
+    if window_n <= 0:
+        return float("nan")
+
+    n = min(len(strain_L1), len(strain_H1))
+    n_windows = n // window_n
+    if n_windows <= 0:
+        return float("nan")
+
+    L = np.asarray(strain_L1[: n_windows * window_n]).reshape(n_windows, window_n)
+    H = np.asarray(strain_H1[: n_windows * window_n]).reshape(n_windows, window_n)
+
+    max_abs = np.maximum(np.max(np.abs(L), axis=1), np.max(np.abs(H), axis=1))
+    return float(np.mean(max_abs > float(threshold)))
+
+
+def _prepared_tail_summary(
+    strain_L1: np.ndarray,
+    strain_H1: np.ndarray,
+    sample_rate: float,
+    window_s: float,
+) -> np.ndarray:
+    """
+    One transient-amplitude summary per window for optional Wasserstein diagnostic.
+
+    Uses max over detectors of q99.9(|prepared strain|) per window.
+    """
+    window_n = int(round(float(window_s) * float(sample_rate)))
+    if window_n <= 0:
+        return np.array([], dtype=np.float64)
+
+    n = min(len(strain_L1), len(strain_H1))
+    n_windows = n // window_n
+    if n_windows <= 0:
+        return np.array([], dtype=np.float64)
+
+    L = np.asarray(strain_L1[: n_windows * window_n]).reshape(n_windows, window_n)
+    H = np.asarray(strain_H1[: n_windows * window_n]).reshape(n_windows, window_n)
+
+    qL = np.quantile(np.abs(L), 0.999, axis=1)
+    qH = np.quantile(np.abs(H), 0.999, axis=1)
+    return np.maximum(qL, qH).astype(np.float64)
+
+
+def _percentile(value: float, baseline: np.ndarray) -> float:
+    baseline = np.asarray(baseline, dtype=np.float64)
+    baseline = baseline[np.isfinite(baseline)]
+
+    if not np.isfinite(value) or baseline.size == 0:
+        return float("nan")
+
+    return float(100.0 * np.mean(baseline <= value))
+
+
+def _knn_median(values: Iterable[float], k: int) -> float:
+    vals = np.asarray(list(values), dtype=np.float64)
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        return float("nan")
+
+    k_eff = max(1, min(int(k), vals.size))
+    return float(np.median(np.sort(vals)[:k_eff]))
+
+
+def build_training_noise_reference(
+    training_noise_files: Iterable[str],
+    training_config: Optional[Dict[str, Any]],
+    similarity_config: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """
+    Precompute training-file ASD features and leave-one-out baselines.
+    """
+    files = list(training_noise_files)
+    k = int(similarity_config.get("k_nearest", 3))
+    include_wasserstein = bool(similarity_config.get("include_wasserstein", True))
+    window_s = float(similarity_config.get("tail_window_s", 1.0))
+    threshold = float(similarity_config.get("tail_threshold", 5.0))
+
+    features = []
+    for path in files:
+        feat = _read_noise_psd_features(path, similarity_config)
+        if feat is not None:
+            features.append(feat)
+
+    if not features:
+        return None
+
+    n = len(features)
+
+    # Pairwise ASD distances.
+    asd_matrix = np.full((n, n), np.nan, dtype=np.float64)
+    for i in range(n):
+        for j in range(i + 1, n):
+            d = _asd_distance_from_features(features[i], features[j])
+            asd_matrix[i, j] = d
+            asd_matrix[j, i] = d
+
+    # Leave-one-out kNN ASD baseline.
+    asd_baseline = []
+    for i in range(n):
+        row = np.delete(asd_matrix[i], i)
+        asd_baseline.append(_knn_median(row, k))
+    asd_baseline = np.asarray(asd_baseline, dtype=np.float64)
+
+    # Training tail metrics require preparing strain. This is more expensive but
+    # only done once per run and is optional/best-effort.
+    tail_rates = []
+    tail_summaries = []
+
+    for feat in features:
+        path = feat["path"]
+        try:
+            data, attrs = read_downloader_hdf5(path)
+            strain_L1, strain_H1, prep_info = prepare_strain_for_inference(
+                data=data,
+                attrs=attrs,
+                training_config=training_config,
+                inference_config={
+                    "inference": {
+                        "edge_buffer": 2048,
+                    }
+                },
+            )
+
+            sample_rate = float(prep_info["sample_rate"])
+            tail_rates.append(
+                _prepared_tail_window_rate(
+                    strain_L1=strain_L1,
+                    strain_H1=strain_H1,
+                    sample_rate=sample_rate,
+                    window_s=window_s,
+                    threshold=threshold,
+                )
+            )
+
+            if include_wasserstein:
+                tail_summaries.append(
+                    _prepared_tail_summary(
+                        strain_L1=strain_L1,
+                        strain_H1=strain_H1,
+                        sample_rate=sample_rate,
+                        window_s=window_s,
+                    )
+                )
+            else:
+                tail_summaries.append(np.array([], dtype=np.float64))
+
+        except Exception as exc:
+            print(f"WARNING: could not compute training tail metrics for {path}: {exc}")
+            tail_rates.append(float("nan"))
+            tail_summaries.append(np.array([], dtype=np.float64))
+
+    tail_rates = np.asarray(tail_rates, dtype=np.float64)
+
+    # Leave-one-out Wasserstein baseline.
+    wasserstein_baseline = np.array([], dtype=np.float64)
+    if include_wasserstein:
+        W = np.full((n, n), np.nan, dtype=np.float64)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if tail_summaries[i].size == 0 or tail_summaries[j].size == 0:
+                    continue
+                d = float(wasserstein_distance(tail_summaries[i], tail_summaries[j]))
+                W[i, j] = d
+                W[j, i] = d
+
+        wasserstein_baseline = []
+        for i in range(n):
+            row = np.delete(W[i], i)
+            wasserstein_baseline.append(_knn_median(row, k))
+        wasserstein_baseline = np.asarray(wasserstein_baseline, dtype=np.float64)
+
+    return {
+        "features": features,
+        "paths": [f["path"] for f in features],
+        "k_nearest": k,
+        "asd_baseline": asd_baseline,
+        "tail_rates": tail_rates,
+        "median_train_tail_window_rate": float(np.nanmedian(tail_rates)),
+        "tail_summaries": tail_summaries,
+        "wasserstein_baseline": wasserstein_baseline,
+        "include_wasserstein": include_wasserstein,
+        "tail_window_s": window_s,
+        "tail_threshold": threshold,
+    }
+
+
+def compute_noise_domain_metrics(
+    eval_noise_file: str,
+    eval_strain_L1: np.ndarray,
+    eval_strain_H1: np.ndarray,
+    eval_attrs: Dict[str, Any],
+    training_reference: Optional[Dict[str, Any]],
+    training_config: Optional[Dict[str, Any]],
+    similarity_config: Dict[str, Any],
+    prep_info: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """
+    Compute ASD drift and prepared-tail diagnostics for one inference file.
+
+    Returns None if training noise was not configured.
+    """
+    if training_reference is None:
+        return None
+
+    eval_feat = _read_noise_psd_features(eval_noise_file, similarity_config)
+    if eval_feat is None:
+        return {
+            "available": False,
+            "message": "Could not compute ASD features for this inference file.",
+        }
+
+    k = int(training_reference["k_nearest"])
+
+    # ASD distances to all training files.
+    pairwise_asd = {}
+    for train_feat in training_reference["features"]:
+        d = _asd_distance_from_features(eval_feat, train_feat)
+        pairwise_asd[train_feat["path"]] = float(d)
+
+    sorted_pairs = sorted(
+        pairwise_asd.items(),
+        key=lambda item: item[1] if np.isfinite(item[1]) else np.inf,
+    )
+
+    asd_knn_distance = _knn_median(pairwise_asd.values(), k)
+    asd_typical_ratio = float(np.exp(asd_knn_distance)) if np.isfinite(asd_knn_distance) else float("nan")
+    drift_percentile = _percentile(asd_knn_distance, training_reference["asd_baseline"])
+
+    # Tail-rate diagnostic on prepared inference strain.
+    sample_rate = float(prep_info["sample_rate"])
+    window_s = float(training_reference["tail_window_s"])
+    threshold = float(training_reference["tail_threshold"])
+
+    tail_window_rate = _prepared_tail_window_rate(
+        strain_L1=eval_strain_L1,
+        strain_H1=eval_strain_H1,
+        sample_rate=sample_rate,
+        window_s=window_s,
+        threshold=threshold,
+    )
+
+    median_train_tail = float(training_reference["median_train_tail_window_rate"])
+    if np.isfinite(median_train_tail) and median_train_tail > 0:
+        tail_rate_ratio = float(tail_window_rate / median_train_tail)
+    else:
+        tail_rate_ratio = float("nan")
+
+    result = {
+        "available": True,
+        "training_noise_count": len(training_reference["paths"]),
+        "k_nearest": k,
+        "asd_knn_distance": float(asd_knn_distance),
+        "asd_typical_ratio": float(asd_typical_ratio),
+        "drift_percentile": float(drift_percentile),
+        "nearest_training_files": [p for p, _ in sorted_pairs[:k]],
+        "all_asd_distances_to_training": pairwise_asd,
+        "tail_window_rate": float(tail_window_rate),
+        "median_train_tail_window_rate": float(median_train_tail),
+        "tail_rate_ratio_to_train": float(tail_rate_ratio),
+        "tail_threshold": threshold,
+        "tail_window_s": window_s,
+    }
+
+    if bool(training_reference.get("include_wasserstein", False)):
+        eval_tail_summary = _prepared_tail_summary(
+            strain_L1=eval_strain_L1,
+            strain_H1=eval_strain_H1,
+            sample_rate=sample_rate,
+            window_s=window_s,
+        )
+
+        pairwise_w = {}
+        if eval_tail_summary.size > 0:
+            for path, train_summary in zip(
+                training_reference["paths"],
+                training_reference["tail_summaries"],
+            ):
+                if train_summary.size == 0:
+                    pairwise_w[path] = float("nan")
+                else:
+                    pairwise_w[path] = float(wasserstein_distance(eval_tail_summary, train_summary))
+
+        tail_w_knn = _knn_median(pairwise_w.values(), k)
+        tail_w_percentile = _percentile(
+            tail_w_knn,
+            training_reference.get("wasserstein_baseline", np.array([], dtype=np.float64)),
+        )
+
+        result.update(
+            {
+                "tail_wasserstein_knn": float(tail_w_knn),
+                "tail_wasserstein_percentile": float(tail_w_percentile),
+                "all_tail_wasserstein_to_training": pairwise_w,
+            }
+        )
+
+    return result
+
+def format_noise_metrics_text(noise_metrics: Optional[Dict[str, Any]]) -> List[str]:
+    lines = []
+    lines.append("-" * 100)
+    lines.append("NOISE DOMAIN METRICS")
+    lines.append("-" * 100)
+
+    if noise_metrics is None:
+        lines.append(
+            "Training noise files were not provided. "
+            "Set noise_similarity.training_noise_path in the inference YAML "
+            "to compute ASD drift and tail diagnostics."
+        )
+        return lines
+
+    if not noise_metrics.get("available", False):
+        lines.append(noise_metrics.get("message", "Noise-domain metrics are unavailable."))
+        return lines
+
+    asd = float(noise_metrics.get("asd_knn_distance", float("nan")))
+    ratio = float(noise_metrics.get("asd_typical_ratio", float("nan")))
+    percentile = float(noise_metrics.get("drift_percentile", float("nan")))
+
+    lines.append(f"Training noise files used: {noise_metrics.get('training_noise_count', 'unknown')}")
+    lines.append(f"k-nearest aggregation: k={noise_metrics.get('k_nearest', 'unknown')}")
+    lines.append("")
+    lines.append(f"ASD kNN distance: {asd:.6g}")
+    lines.append(f"Approximate ASD mismatch: {ratio:.3g}x")
+    lines.append(f"ASD drift percentile: {percentile:.3g}")
+    lines.append("")
+    lines.append("Interpretation:")
+
+    if np.isfinite(ratio):
+        lines.append(
+            f"  This file's ASD differs from its nearest training-noise neighborhood "
+            f"by about {(ratio - 1.0) * 100.0:.1f}% on average."
+        )
+
+    if np.isfinite(percentile):
+        lines.append(
+            f"  It is more spectrally drifted than about {percentile:.1f}% "
+            f"of leave-one-out training-file comparisons."
+        )
+
+    tail_rate = float(noise_metrics.get("tail_window_rate", float("nan")))
+    median_tail = float(noise_metrics.get("median_train_tail_window_rate", float("nan")))
+    tail_ratio = float(noise_metrics.get("tail_rate_ratio_to_train", float("nan")))
+    tail_window_s = noise_metrics.get("tail_window_s", "unknown")
+    tail_threshold = noise_metrics.get("tail_threshold", "unknown")
+
+    lines.append("")
+    lines.append(f"Prepared tail window rate: {tail_rate:.6g}")
+    lines.append(f"Median train tail window rate: {median_tail:.6g}")
+    lines.append(f"Tail rate ratio to training median: {tail_ratio:.3g}x")
+    lines.append(
+        f"Tail definition: fraction of {tail_window_s}-s "
+        f"windows with max(|prepared strain|) > {tail_threshold}"
+    )
+    lines.append("")
+    lines.append("Interpretation:")
+
+    if np.isfinite(tail_rate):
+        lines.append(
+            f"  About {100.0 * tail_rate:.2f}% of {tail_window_s}-s windows contain "
+            f"a large prepared-strain excursion."
+        )
+
+    if np.isfinite(tail_ratio):
+        if tail_ratio < 0.5:
+            tail_text = "less tail-heavy than the typical training noise file by this diagnostic."
+        elif tail_ratio < 1.5:
+            tail_text = "broadly similar to the typical training noise file by this diagnostic."
+        elif tail_ratio < 3.0:
+            tail_text = (
+                "more tail-heavy than the typical training noise file; "
+                "interpret predictions with some caution."
+            )
+        else:
+            tail_text = (
+                "substantially more tail-heavy than the typical training noise file; "
+                "interpret predictions with extra caution."
+            )
+
+        lines.append(
+            f"  This is {tail_ratio:.2g}x the median training-file tail-window rate, "
+            f"so this file is {tail_text}"
+        )
+
+    if "tail_wasserstein_knn" in noise_metrics:
+        tail_w = float(noise_metrics.get("tail_wasserstein_knn", float("nan")))
+        tail_w_pct = float(noise_metrics.get("tail_wasserstein_percentile", float("nan")))
+
+        lines.append("")
+        lines.append(f"Tail Wasserstein kNN distance: {tail_w:.6g}")
+        lines.append(f"Tail Wasserstein percentile: {tail_w_pct:.3g}")
+        lines.append("")
+        lines.append("Interpretation:")
+
+        if np.isfinite(tail_w_pct):
+            if tail_w_pct < 50:
+                w_text = (
+                    "closer to the training set than a typical leave-one-out "
+                    "training comparison."
+                )
+            elif tail_w_pct < 80:
+                w_text = (
+                    "within the normal training range by this tail-distribution diagnostic."
+                )
+            elif tail_w_pct < 95:
+                w_text = (
+                    "somewhat more tail-distribution shifted than typical training comparisons."
+                )
+            else:
+                w_text = (
+                    "unusually tail-distribution shifted relative to the training set; "
+                    "interpret predictions with caution."
+                )
+
+            lines.append(
+                f"  The tail-summary distribution is at the {tail_w_pct:.1f}th percentile "
+                f"relative to leave-one-out training comparisons."
+            )
+            lines.append(f"  It is {w_text}")
+
+    nearest = noise_metrics.get("nearest_training_files", [])
+    if nearest:
+        lines.append("")
+        lines.append("Nearest training files by ASD:")
+        for path in nearest:
+            lines.append(f"  {path}")
+
+    return lines
+    
+
+
+'''
 def compare_noise_files(noise_file_a: str, noise_file_b: str) -> float:
     """
     Placeholder for future noise-similarity metric.
@@ -675,4 +1330,4 @@ def compare_eval_noise_to_training_noise(
     }
 
     average = float(np.mean(list(pairwise.values()))) if pairwise else float("nan")
-    return pairwise, average
+    return pairwise, average'''
