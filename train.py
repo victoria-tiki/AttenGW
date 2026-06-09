@@ -17,7 +17,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau#, LambdaLR
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint,TQDMProgressBar#, Callback
 
-from model import *
+import importlib
 from data_generator import *
 
 print(f"PyTorch version: {torch.__version__}", flush=True)
@@ -27,14 +27,45 @@ import argparse
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('medium')
 
+
+AVAILABLE_MODELS = {
+    "model_hdcn_crossattn",
+    "model_hdcn_graph",
+    "model_tcn_earlyfusion",
+    "model_tcn_sepstems_simplefusion",
+    "model_tcn_sepstems_interaction",
+    "model_tcn_temporalattn_gated",
+    "model_tcn_stft",
+    "model_bimamba",
+}
+
+
+def build_model(model_name: str, model_kwargs: dict | None = None):
+    if model_name not in AVAILABLE_MODELS:
+        raise ValueError(
+            f"Unknown model '{model_name}'. Available models are: "
+            + ", ".join(sorted(AVAILABLE_MODELS))
+        )
+
+    model_kwargs = model_kwargs or {}
+
+    module = importlib.import_module(f"models.{model_name}")
+
+    if not hasattr(module, "full_module"):
+        raise AttributeError(
+            f"models.{model_name} does not define full_module"
+        )
+
+    return module.full_module(**model_kwargs)
+    
+    
 class LightningModel(LightningModule):
-    def __init__(self, lr=0.001, internal_epoch=0):
+    def __init__(self, lr=0.001, internal_epoch=0, model_name="model_tcn_earlyfusion", model_kwargs=None,):
         super(LightningModel, self).__init__()
-        self.model = full_module()
+        self.model = build_model(model_name, model_kwargs)
         self.lr = lr
         self.internal_epoch = internal_epoch
         self.criterion = nn.BCELoss()
-
     def forward(self, x):
         return self.model(x)
 
@@ -99,7 +130,7 @@ class LightningModel(LightningModule):
             f"Epoch {self.current_epoch}: updated training dataset epoch counter. "
             f"Learning rate = {lr:.6e}",
             flush=True,
-        )        
+        )  
     #def on_validation_epoch_end(self):
     #    val_dataset = self.trainer.datamodule.val_dataset
 
@@ -114,7 +145,8 @@ def load_train_config(config_path):
     """Load training defaults from YAML config."""
     with open(config_path, "r") as f:
         cfg = yaml.safe_load(f)
-
+        
+    model = cfg.get("model", {})
     shared = cfg["shared"]
     paths = cfg["paths"]
     training = cfg["training"]
@@ -144,6 +176,10 @@ def load_train_config(config_path):
         "p_higher_fin": training["p_higher_fin"],
         "snr_range_high": training["snr_range_high"],
         "snr_range_low": training["snr_range_low"],
+        
+        # model
+        "model_name": model.get("name", "model_tcn_earlyfusion"),
+        "model_kwargs": model.get("kwargs", {}),
 
         # shared preprocessing
         "sample_rate": shared["sample_rate"],
@@ -349,6 +385,9 @@ def main():
     parser.add_argument('--max_epochs', type=int, default=100, help='Maximum number of training epochs')
     parser.add_argument('--initial_epoch', type=int, default=0, help='starting epoch counter (for curricula / schedules; no checkpoint resume)')
     
+    # --- model selection ---
+    parser.add_argument("--model_name",type=str,default="model_tcn_earlyfusion",choices=sorted(AVAILABLE_MODELS),help="Model module name inside models/. Each module must define full_module.")
+    
     # Data-generation 
     parser.add_argument('--noise_prob', type=float, default=0.6, help='probability of sampling noise-only examples')
     parser.add_argument('--p_higher_init', type=float, default=0.9, help='initial probability of sampling higher snr range')
@@ -429,7 +468,7 @@ def main():
         # limit_val_batches=0.0001,
     )
 
-    model = LightningModel(lr=args.lr_init, internal_epoch=args.initial_epoch)
+    model = LightningModel(lr=args.lr_init, internal_epoch=args.initial_epoch, model_name=args.model_name, model_kwargs=args.model_kwargs)
 
     #------ DataModule  ------
     data_module = WaveformDataModule(
