@@ -183,9 +183,9 @@ edge_buffer: 2048
 noise_prob: 0.60
 ```
 
-`segment_length` is the number of samples (segment_length//sample_rate=length of time segment the model sees in seconds) fed to the model.
+`segment_length` is the number of samples fed to the model. The corresponding signal duration is `segment_length / sample_rate` seconds. This value should be adapted to the signal class. For example, BNS signals are typically much longer in-band than BBH signals, so BNS searches may benefit from a larger `segment_length`. For the BBH experiments in this repository, `segment_length: 4096` at `sample_rate: 4096` (i.e. a signal duration of 1 second) was found to work well.
 
-`dim` is the number of samples immediately before merger labeled as signal.
+`dim` is the number of samples immediately before merger that are labeled as signal during training. Like `segment_length`, this should be adapted to the signal class. For the BBH experiments in this repository, `dim: 1024` was found to work well.
 
 `edge_buffer` trims whitening/filtering edge artifacts.
 
