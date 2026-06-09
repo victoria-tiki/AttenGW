@@ -16,8 +16,13 @@ from inference_utils import (
     plot_prediction_summary,
     prepare_strain_for_inference,
     read_downloader_hdf5,
+    format_noise_metrics_text,
+    resolve_training_noise_files,
+    build_training_noise_reference,
+    compute_noise_domain_metrics,
     triggers_for_threshold_and_width,
 )
+
 
 
 def parse_args():
@@ -72,6 +77,10 @@ def print_file_summary(input_file, attrs, prep_info):
     print(f"  effective_gps_start_after_preprocessing: {prep_info['effective_gps_start']}")
     print(f"  sample_rate: {prep_info['sample_rate']} Hz")
     print(f"  trim_samples: {prep_info['trim_samples']}")
+    print(f"  checkpoint_noise_is_whitened: {prep_info.get('checkpoint_noise_is_whitened', 'unknown')}")
+    print(f"  whitened_during_inference: {prep_info.get('whitened_during_inference', 'unknown')}")
+    print(f"  mean_subtraction: {prep_info.get('mean_subtraction', 'unknown')}")
+    print(f"  std_normalization: {prep_info.get('std_normalization', 'unknown')}")
 
 def resolve_input_files(input_path):
     """
@@ -87,7 +96,7 @@ def resolve_input_files(input_path):
     raise FileNotFoundError(f"No input files found for: {input_path}")
 
 
-def format_all_results_text(input_file, run_dir, ckpt_path, attrs, prep_info, all_results):
+def format_all_results_text(input_file, run_dir, ckpt_path, attrs, prep_info, all_results, noise_metrics=None,):
     """
     Human-readable text output for one input file.
 
@@ -111,6 +120,12 @@ def format_all_results_text(input_file, run_dir, ckpt_path, attrs, prep_info, al
     lines.append(f"  effective_gps_start_after_preprocessing: {prep_info['effective_gps_start']}")
     lines.append(f"  sample_rate: {prep_info['sample_rate']} Hz")
     lines.append(f"  trim_samples: {prep_info['trim_samples']}")
+    lines.append(f"  checkpoint_noise_is_whitened: {prep_info.get('checkpoint_noise_is_whitened', 'unknown')}")
+    lines.append(f"  whitened_during_inference: {prep_info.get('whitened_during_inference', 'unknown')}")
+    lines.append(f"  mean_subtraction: {prep_info.get('mean_subtraction', 'unknown')}")
+    lines.append(f"  std_normalization: {prep_info.get('std_normalization', 'unknown')}")
+    lines.append("")
+    lines.extend(format_noise_metrics_text(noise_metrics))
     lines.append("")
     lines.append("-" * 100)
     lines.append("TRIGGER COUNT SUMMARY")
@@ -288,6 +303,25 @@ def main():
         raise ValueError("Inference config must define input.path or input.file.")
 
     input_files = resolve_input_files(input_path)
+    
+    # Optional noise-domain reference, used only for summary diagnostics.
+    noise_similarity_cfg = cfg.get("noise_similarity", {})
+    training_noise_files = resolve_training_noise_files(
+        noise_similarity_cfg.get("training_noise_path")
+    )
+    noise_reference = None
+    if training_noise_files:
+        print(f"Resolved {len(training_noise_files)} training noise file(s) for similarity metrics.")
+        noise_reference = build_training_noise_reference(
+            training_noise_files=training_noise_files,
+            training_config=training_config,
+            similarity_config=noise_similarity_cfg,
+        )
+    else:
+        print(
+            "No training noise files configured for similarity metrics. "
+            "Set noise_similarity.training_noise_path to enable them."
+        )
 
     output_dir = cfg["output"]["output_dir"]
     os.makedirs(output_dir, exist_ok=True)
@@ -296,7 +330,7 @@ def main():
     print(f"Using device: {device}")
     print(f"Resolved {len(input_files)} input file(s).")
 
-    model = load_model_from_checkpoint(ckpt_path, device)
+    model = load_model_from_checkpoint(ckpt_path=ckpt_path,device=device,training_config=training_config)
 
     inf = cfg["inference"]
     thresholds = inf["thresholds"]
@@ -317,6 +351,17 @@ def main():
             attrs=attrs,
             training_config=training_config,
             inference_config=cfg,
+        )
+        
+        noise_metrics = compute_noise_domain_metrics(
+            eval_noise_file=input_file,
+            eval_strain_L1=strain_L1,
+            eval_strain_H1=strain_H1,
+            eval_attrs=attrs,
+            training_reference=noise_reference,
+            training_config=training_config,
+            similarity_config=noise_similarity_cfg,
+            prep_info=prep_info,
         )
 
         print_file_summary(input_file, attrs, prep_info)
@@ -404,6 +449,7 @@ def main():
                     attrs=attrs,
                     prep_info=prep_info,
                     all_results=all_results,
+                    noise_metrics=noise_metrics,
                 )
             )
 
