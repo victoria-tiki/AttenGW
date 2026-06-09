@@ -1,6 +1,6 @@
 # AttenGW for Gravitational Wave Classification
 
-AttenGW is an attention-based gravitational-wave detection pipeline for classifying compact-binary merger signals in detector strain. The repository includes tools for downloading LIGO noise from GWOSC, training the detection model, and inspecting predictions from trained checkpoints. The results of this model are further described in [arXiv:2512.12513](https://arxiv.org/abs/2512.12513).
+AttenGW is a gravitational-wave detection pipeline for classifying compact-binary merger signals in detector strain. The repository includes tools for downloading LIGO noise from GWOSC, training a detection model, and inspecting predictions from trained checkpoints. The results of this pipeline are further described in [arXiv:2512.12513](https://arxiv.org/abs/2512.12513).
 
 ---
 
@@ -76,7 +76,7 @@ with shape:
 /freqs
 ```
 
-See [`docs/config.md`](docs/config.md) for the main configuration options. See [`docs/data.md`](docs/data.md) for more in-depth descriptions of expected data formats. Example datasets (both for injected signals and noise) that may be used to test AttenGW are provided in example_data. See `data.md` for a description of those datasets. 
+See [`docs/config.md`](docs/config.md) for the main configuration options. See [`docs/data.md`](docs/data.md) for more in-depth descriptions of expected data formats. Example datasets (both for injected signals and noise) that may be used to test AttenGW are provided in example_data. See `data.md` for a description of those datasets. By default, training uses `model_tcn_earlyfusion`, but the model can be changed through the YAML config (see `config.md` for how to change models, see [`docs/models.md`](docs/models.md) for an overview over all available models). 
 
 ---
 
@@ -172,6 +172,7 @@ docs/                       Extended documentation
 example_data/signal/        Tiny example injection file
 example_data/noise/         Tiny example noise file and downloader diagnostics
 img/                        README and documentation images
+models/                          Config-selectable model definitions
 scripts/submit_download.slurm  SLURM script for downloading noise data
 scripts/submit_train.slurm     SLURM script for launching training
 scripts/submit_infer.slurm     SLURM script for running inference
