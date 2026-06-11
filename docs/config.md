@@ -93,6 +93,16 @@ The diagnostic plot options save quick checks of the downloaded data. `plot_time
 
 <sup>Example downloader timeline showing the windows saved after QC and selection.</sup>
 
+The signal-window window-shortening fallback options are:
+
+```yaml
+allow_signal_window_shrink: true
+min_signal_window_len_s: 64.0
+```
+
+For signal downloads, `allow_signal_window_shrink` can be enabled to keep the event centered but retry shorter windows if the full `window_len_s` interval is rejected because of missing or invalid detector data; `min_signal_window_len_s` sets the shortest fallback window to try.
+
+
 
 The advanced QC options are:
 
