@@ -2,11 +2,10 @@
 # This file is used by both submit_download.slurm and submit.slurm.
 
 shared:
-  # Must match between downloaded noise files and training.
   sample_rate: 4096
   noise_is_whitened: false
 
-  # Change only if you know noise psd properties to match.
+  # Change if you know noise psd properties.
   band_low: 25.0
   band_high: 450.0
   bandpass_order: 4
@@ -58,6 +57,10 @@ download:
   glitch_max_frac: 0.01
   max_std_ratio: 10.0
   psd_seglen_s: 4.0
+
+  # Signal-only window-shortening fallback.
+  allow_signal_window_shrink: true
+  min_signal_window_len_s: 64.0
 
   # Optional extra QC thresholds. Leave blank to disable.
   amp_thresh:
