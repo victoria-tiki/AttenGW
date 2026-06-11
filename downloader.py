@@ -158,7 +158,44 @@ def interval_overlaps_windows(start, end, windows):
             return True
     return False
 
+def get_unique_events_in_range(gps_start, gps_end, dedup_tol_s=1.0):
+    ev_list = query_events(select=[
+        f"gps-time >= {gps_start}",
+        f"gps-time <= {gps_end}",
+    ])
 
+    rows = []
+    for ev in ev_list:
+        try:
+            gps = float(event_gps(ev))
+        except Exception as e:
+            print(f"WARNING: could not get GPS for {ev}: {e}", flush=True)
+            continue
+        rows.append({"event": ev, "gps": gps})
+
+    rows = sorted(rows, key=lambda r: r["gps"])
+
+    unique = []
+    for row in rows:
+        if not unique or abs(row["gps"] - unique[-1]["gps"]) > dedup_tol_s:
+            unique.append({
+                "gps": row["gps"],
+                "events": [row["event"]],
+            })
+        else:
+            unique[-1]["events"].append(row["event"])
+
+    print("GWOSC event records before deduplication:", flush=True)
+    for row in rows:
+        print(f"  {row['event']:<35} gps={row['gps']:.3f}", flush=True)
+
+    print("Unique physical-event GPS groups after deduplication:", flush=True)
+    for i, u in enumerate(unique, start=1):
+        names = ", ".join(u["events"])
+        print(f"  {i:03d}: gps={u['gps']:.3f} names=[{names}]", flush=True)
+
+    return unique
+    
 def plot_psd_examples(windows, output_dir, whiten, max_plots=5, mode="noise"):
     """
     For a few saved windows, read psd_H1 / psd_L1 / freqs from the HDF5
@@ -442,6 +479,8 @@ def download_and_save_window(
     max_raw_std=None, min_raw_std=None, max_std_ratio=None,
     band_low=25.0, band_high=450.0, bandpass_order=4,
     psd_seglen_s=4.0,
+    event_gps_value=None,
+    event_names=None,
 ):
     """
     Download H1/L1 for [start, end), optionally apply:
@@ -624,8 +663,6 @@ def download_and_save_window(
         if freqs_ref is not None:
             f.create_dataset("freqs", data=freqs_ref)
 
-        f.attrs["gps_start"] = start
-        f.attrs["gps_end"]   = end
         f.attrs["mode"]      = mode
         f.attrs["whiten"]    = bool(whiten)
         f.attrs["sample_rate"] = sample_rate
@@ -633,6 +670,18 @@ def download_and_save_window(
         f.attrs["band_high"] = band_high
         f.attrs["bandpass_order"] = bandpass_order
         f.attrs["psd_seglen_s"] = psd_seglen_s
+        f.attrs["gps_start"] = start
+        f.attrs["gps_end"]   = end
+
+        if event_gps_value is not None:
+            f.attrs["event_gps"] = float(event_gps_value)
+
+        if event_names is not None:
+            if isinstance(event_names, (list, tuple)):
+                f.attrs["event_names"] = ",".join(str(x) for x in event_names)
+            else:
+                f.attrs["event_names"] = str(event_names)
+                
 
     std_log = ", ".join(
         f"{ifo}:qc_std={per_ifo_std.get(ifo, np.nan):.3e}" for ifo in ifo_list
@@ -874,26 +923,28 @@ def main():
                 print(f"Skipped window {s}-{e} due to DQ / amplitude / RMS / glitch / std vetos.")
 
     if args.mode in ["signal", "both"]:
+        unique_events = get_unique_events_in_range(args.gps_start,args.gps_end,dedup_tol_s=1.0,)
+    
         signal_candidates = []
-        for ev in ev_list:
-            t0 = event_gps(ev)
+        for u in unique_events:
+            t0 = float(u["gps"])
             ws = t0 - args.window_len_s / 2
             we = ws + args.window_len_s
-            signal_candidates.append((ws, we))
-        
-        print(f"Found {len(signal_candidates)} candidate signal windows", flush=True)
+            signal_candidates.append((ws, we, t0, u["events"]))
+    
+        print(f"Found {len(signal_candidates)} unique candidate signal windows", flush=True)
 
         if args.n_segments is not None:
             signal_candidates = signal_candidates[:args.n_segments]
-
-        for (s, e) in signal_candidates:
-            # by default, don't clamp glitches on signals
+    
+        for i, (s, e, event_gps_value, event_names) in enumerate(signal_candidates, start=1):
             print(
-                f"Trying signal window {len(signal_windows) + 1}/{len(signal_candidates)}: "
-                f"{s:.1f}–{e:.1f}",
+                f"Trying signal window {i}/{len(signal_candidates)}: "
+                f"{s:.1f}–{e:.1f}; event_gps={event_gps_value:.3f}; "
+                f"events={event_names}",
                 flush=True,
             )
-
+    
             downloaded = download_and_save_window(
                 ifos, s, e, args.sample_rate, mode="signal",
                 output_dir=args.output_dir,
@@ -909,10 +960,19 @@ def main():
                 band_high=args.band_high,
                 bandpass_order=args.bandpass_order,
                 psd_seglen_s=args.psd_seglen_s,
+                event_gps_value=event_gps_value,
+                event_names=event_names,
             )
+    
             if downloaded:
                 signal_windows.append((s, e))
-
+            else:
+                print(
+                    f"Skipped signal candidate {i}/{len(signal_candidates)} "
+                    f"at event_gps={event_gps_value:.3f}",
+                    flush=True,
+                )
+                
     if args.plot_timeline:
         plot_timeline_all(
             args.gps_start, args.gps_end,
