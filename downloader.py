@@ -48,6 +48,11 @@ def parse_args(defaults=None, argv=None):
                         help="Welch PSD segment length in seconds.")
     parser.add_argument("--target_plot_fs", type=float, default=1024.0,
                         help="Target sample rate for diagnostic time-series plots.")
+                        
+    shrink_group = parser.add_mutually_exclusive_group()
+    shrink_group.add_argument("--allow_signal_window_shrink", dest="allow_signal_window_shrink", action="store_true", default=None, help="Signal mode only: if the full centered event window is rejected, retry shorter centered windows.")
+    shrink_group.add_argument("--no_allow_signal_window_shrink", dest="allow_signal_window_shrink", action="store_false", help="Disable signal-window shrinking even if the config enables it.")
+    parser.add_argument("--min_signal_window_len_s", type=float, default=None, help="Minimum centered signal window length to try when shrinking signal windows.")
 
     # basic scalar cuts on raw / de-glitched strain
     parser.add_argument("--amp_thresh", type=float, default=None,
@@ -136,6 +141,8 @@ def load_download_config(config_path):
         "rms_thresh": download.get("rms_thresh"),
         "max_raw_std": download.get("max_raw_std"),
         "min_raw_std": download.get("min_raw_std"),
+        "allow_signal_window_shrink": bool(download.get("allow_signal_window_shrink", False)),
+        "min_signal_window_len_s": float(download.get("min_signal_window_len_s", 64.0)),
 
         # if training will use noise_is_whitened=True, downloader should save whitened strain
         "whiten": bool(shared["noise_is_whitened"]),
@@ -472,16 +479,7 @@ def clamp_glitches(vals, sigma=8.0, max_frac=0.01):
     return vals_clipped, frac_bad, False
 
 
-def download_and_save_window(
-    ifo_list, start, end, sample_rate, mode, output_dir,
-    amp_thresh=None, rms_thresh=None, whiten=False,
-    glitch_sigma=None, glitch_max_frac=0.01,
-    max_raw_std=None, min_raw_std=None, max_std_ratio=None,
-    band_low=25.0, band_high=450.0, bandpass_order=4,
-    psd_seglen_s=4.0,
-    event_gps_value=None,
-    event_names=None,
-):
+def download_and_save_window(ifo_list, start, end, sample_rate, mode, output_dir, amp_thresh=None, rms_thresh=None, whiten=False, glitch_sigma=None, glitch_max_frac=0.01, max_raw_std=None, min_raw_std=None, max_std_ratio=None, band_low=25.0, band_high=450.0, bandpass_order=4, psd_seglen_s=4.0, event_gps=None, event_names=None, requested_window_len_s=None, saved_window_len_s=None):
     """
     Download H1/L1 for [start, end), optionally apply:
       - glitch clamping in full band (raw domain),
@@ -673,14 +671,21 @@ def download_and_save_window(
         f.attrs["gps_start"] = start
         f.attrs["gps_end"]   = end
 
-        if event_gps_value is not None:
-            f.attrs["event_gps"] = float(event_gps_value)
-
+        if event_gps is not None:
+            f.attrs["event_gps"] = float(event_gps)
+    
         if event_names is not None:
             if isinstance(event_names, (list, tuple)):
                 f.attrs["event_names"] = ",".join(str(x) for x in event_names)
             else:
                 f.attrs["event_names"] = str(event_names)
+                
+        if requested_window_len_s is not None:
+            f.attrs["requested_window_len_s"] = float(requested_window_len_s)
+        if saved_window_len_s is not None:
+            f.attrs["saved_window_len_s"] = float(saved_window_len_s)
+        if requested_window_len_s is not None and saved_window_len_s is not None:
+            f.attrs["signal_window_shrunk"] = bool(float(saved_window_len_s) < float(requested_window_len_s))
                 
 
     std_log = ", ".join(
@@ -689,7 +694,37 @@ def download_and_save_window(
     print(f"[ACCEPT] {mode} {start}-{end}: {std_log}")
     return True
 
+def download_signal_with_optional_shrink(ifos, event_gps, event_names, requested_window_len_s, args):
+    if getattr(args, "allow_signal_window_shrink", False):
+        lengths = []
+        w = float(requested_window_len_s)
+        min_w = float(args.min_signal_window_len_s)
+        while w >= min_w:
+            lengths.append(w)
+            w *= 0.5
+        if lengths and lengths[-1] != min_w and min_w < lengths[-1]:
+            lengths.append(min_w)
+    else:
+        lengths = [float(requested_window_len_s)]
 
+    for window_len_s in lengths:
+        s = float(event_gps) - window_len_s / 2.0
+        e = s + window_len_s
+        print(f"Trying signal window centered on event_gps={event_gps:.3f}: {s:.1f}–{e:.1f} ({window_len_s:g} s); events={event_names}", flush=True)
+
+        downloaded = download_and_save_window(ifos, s, e, args.sample_rate, mode="signal", output_dir=args.output_dir, amp_thresh=None, rms_thresh=None, whiten=args.whiten, glitch_sigma=None, glitch_max_frac=args.glitch_max_frac, max_raw_std=None, min_raw_std=None, max_std_ratio=None, band_low=args.band_low, band_high=args.band_high, bandpass_order=args.bandpass_order, psd_seglen_s=args.psd_seglen_s, event_gps=event_gps, event_names=event_names, requested_window_len_s=requested_window_len_s, saved_window_len_s=window_len_s)
+
+        if downloaded:
+            print(f"[ACCEPT SIGNAL] event_gps={event_gps:.3f}; saved centered window length={window_len_s:g} s; events={event_names}", flush=True)
+            return True, s, e, window_len_s
+
+        if getattr(args, "allow_signal_window_shrink", False):
+            print(f"[SHRINK SIGNAL] event_gps={event_gps:.3f}; {window_len_s:g} s failed, trying shorter if available.", flush=True)
+
+    print(f"[REJECT SIGNAL] event_gps={event_gps:.3f}; no clean centered H1/L1 window found down to {getattr(args, 'min_signal_window_len_s', requested_window_len_s):g} s; events={event_names}", flush=True)
+    return False, None, None, None
+    
+    
 def plot_timeline_all(gps_start, gps_end, noise_intervals, event_times, output_dir):
     def gps_to_mpl(gps):
         t = Time(gps, format='gps')
@@ -938,40 +973,14 @@ def main():
             signal_candidates = signal_candidates[:args.n_segments]
     
         for i, (s, e, event_gps_value, event_names) in enumerate(signal_candidates, start=1):
-            print(
-                f"Trying signal window {i}/{len(signal_candidates)}: "
-                f"{s:.1f}–{e:.1f}; event_gps={event_gps_value:.3f}; "
-                f"events={event_names}",
-                flush=True,
-            )
-    
-            downloaded = download_and_save_window(
-                ifos, s, e, args.sample_rate, mode="signal",
-                output_dir=args.output_dir,
-                amp_thresh=None,
-                rms_thresh=None,
-                whiten=args.whiten,
-                glitch_sigma=None,
-                glitch_max_frac=args.glitch_max_frac,
-                max_raw_std=None,
-                min_raw_std=None,
-                max_std_ratio=None,
-                band_low=args.band_low,
-                band_high=args.band_high,
-                bandpass_order=args.bandpass_order,
-                psd_seglen_s=args.psd_seglen_s,
-                event_gps_value=event_gps_value,
-                event_names=event_names,
-            )
-    
+            print(f"Signal candidate {i}/{len(signal_candidates)}: event_gps={event_gps_value:.3f}; events={event_names}", flush=True)
+        
+            downloaded, saved_s, saved_e, saved_len = download_signal_with_optional_shrink(ifos=ifos, event_gps=event_gps_value, event_names=event_names, requested_window_len_s=args.window_len_s, args=args)
+        
             if downloaded:
-                signal_windows.append((s, e))
+                signal_windows.append((saved_s, saved_e))
             else:
-                print(
-                    f"Skipped signal candidate {i}/{len(signal_candidates)} "
-                    f"at event_gps={event_gps_value:.3f}",
-                    flush=True,
-                )
+                print(f"Skipped signal candidate {i}/{len(signal_candidates)} at event_gps={event_gps_value:.3f}", flush=True)
                 
     if args.plot_timeline:
         plot_timeline_all(
