@@ -78,9 +78,6 @@ model:
 #   model_tcn_temporalattn_gated
 #   model_tcn_stft
 #   model_bimamba
-#
-# All model files should live in models/ and define full_module.
-# Keep kwargs as {} unless testing a model hyperparameter variant.
   name: model_tcn_earlyfusion
   kwargs: {}
 
@@ -97,6 +94,7 @@ training:
   dim: 1024
   segment_length: 4096
   edge_buffer: 2048
+  whitening_context_seconds: 32.0
   noise_prob: 0.60
 
   # Advanced curriculum settings; usually leave unchanged.
