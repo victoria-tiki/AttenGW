@@ -711,10 +711,11 @@ class GWDataset(Dataset):
         full_nH = nf['strain_H1']
     
         # ── slice noise once ─────────────────────────────────────
-        buffer     = self.TRUNC
-        total_len  = (signal_len if inject_signal else 0) + 2*buffer + self.segment_length
+        buffer = self.TRUNC
+        total_len = signal_len + 2 * buffer + self.segment_length
+        
         noise_start = np.random.randint(0, len(full_nL) - total_len)
-        nL = full_nL[noise_start : noise_start + total_len]   
+        nL = full_nL[noise_start : noise_start + total_len]
         nH = full_nH[noise_start : noise_start + total_len]
     
     
@@ -837,7 +838,7 @@ class GWDataset(Dataset):
         segH = segH - meansegH
         
         
-        # --- local QC: avoid big glitches *inside the label region* for positives ---
+        '''# --- local QC: avoid big glitches *inside the label region* for positives ---
         if inject_signal:
             rel_merger = bp_merger_idx - w0
             label_start = max(0, rel_merger - self.label_width)
@@ -883,7 +884,7 @@ class GWDataset(Dataset):
                         force_inject=False,
                         remaining_retries=remaining_retries - 1,
                     )
-                # remaining_retries == 0 → accept even if it's ugly
+                # remaining_retries == 0 → accept even if it's ugly'''
 
 
         
