@@ -177,6 +177,7 @@ def load_train_config(config_path):
         "p_higher_fin": training["p_higher_fin"],
         "snr_range_high": training["snr_range_high"],
         "snr_range_low": training["snr_range_low"],
+        "normalize_per_window_shared": bool(training.get("normalize_per_window_shared", False)),
         
         # model
         "model_name": model.get("name", "model_tcn_earlyfusion"),
@@ -323,6 +324,7 @@ def plot_samples(args, rank: int) -> None:
         train_file=args.train_file,
         val_file=args.val_file,
         noise_is_whitened=args.noise_is_whitened,
+        normalize_per_window_shared=args.normalize_per_window_shared,
         sample_rate=args.sample_rate,
         band_low=args.band_low,
         band_high=args.band_high,
@@ -401,6 +403,7 @@ def main():
     parser.add_argument('--edge_buffer', type=int, default=2048, help='Number of samples trimmed from each side after whitening/filtering to reduce edge artifacts.')
     parser.add_argument("--whitening_context_seconds",type=float,default=None,help=("Total raw context length, in seconds, passed to FFT whitening. Must fit max(signal_len, segment_length) plus 2*edge_buffer. If unset, uses the minimum valid context."),)
     parser.add_argument('--sample_rate', type=int, default=4096, help='Sampling rate in Hz; should match the injection and noise files.')
+    parser.add_argument("--normalize_per_window_shared",action=argparse.BooleanOptionalAction, default=False, help=("Normalize each cropped 1 s window "))
     parser.add_argument('--band_low', type=float, default=25.0, help='Low-frequency cutoff used in dataloader whitening/band-limiting.')
     parser.add_argument('--band_high', type=float, default=450.0, help='High-frequency cutoff used in dataloader whitening/band-limiting.')
     parser.add_argument('--bandpass_order', type=int, default=4, help='Butterworth bandpass filter order used in the dataloader.')
@@ -491,6 +494,7 @@ def main():
         train_file=args.train_file,
         val_file=args.val_file,
         noise_is_whitened=args.noise_is_whitened,
+        normalize_per_window_shared=args.normalize_per_window_shared,
         sample_rate=args.sample_rate,
         band_low=args.band_low,
         band_high=args.band_high,
