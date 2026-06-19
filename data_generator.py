@@ -254,7 +254,7 @@ class GWDataset(Dataset):
              initial_epoch=1, segment_length=4096, edge_buffer=2048, merger_out_prob=0.2,whitening_context_seconds=None,
              validation_epoch=None, p_higher_init=0.5, p_higher_fin=0.05, snr_range_high=(10.0, 25.0), snr_range_low=(7.0, 15.0),
              train_file="train.hdf", val_file="test.hdf",
-             noise_is_whitened=False, noise_range=None,
+             noise_is_whitened=False, noise_range=None, normalize_per_window_shared=False,
              sample_rate=4096, band_low=25.0, band_high=450.0,
              bandpass_order=4, psd_floor=1e-48, psd_outband=1e40):
 
@@ -264,6 +264,7 @@ class GWDataset(Dataset):
         self.train_file = train_file
         self.val_file = val_file
         self.noise_is_whitened = noise_is_whitened
+        self.normalize_per_window_shared = bool(normalize_per_window_shared)
         self.noise_range = noise_range
         
         # ============================================================
@@ -921,13 +922,13 @@ class GWDataset(Dataset):
                 # remaining_retries == 0 → accept even if it's ugly'''
 
 
+        #normalizaion
+        normalization_scale = 1.0
         
-        '''# normalize per window per detector
-        stdsegL=np.std(segL)+1e-8
-        stdsegH=np.std(segH)+1e-8
-        stdsegshared = np.sqrt(0.5*(np.var(segL) + np.var(segH))) + 1e-8
-        segL = segL / stdsegshared
-        segH = segH / stdsegshared'''
+        if self.normalize_per_window_shared:
+            normalization_scale = (np.sqrt(0.5 * (np.var(segL) + np.var(segH))) + 1e-8)
+            segL = segL / normalization_scale
+            segH = segH / normalization_scale
         
         X[:, 0] = segL
         X[:, 1] = segH
@@ -946,8 +947,8 @@ class GWDataset(Dataset):
     
                 #wL_clean = (filtfilt(b, a, whiten.whiten(sig_only_L, psd_L1, self.dt))[buffer:-buffer][w0:w1].copy()-meansegL)/stdsegshared
                 #wH_clean = (filtfilt(b, a, whiten.whiten(sig_only_H, psd_H1, self.dt))[buffer:-buffer][w0:w1].copy()-meansegH)/stdsegshared
-                wL_clean = (whiten.whiten(sig_only_L, psd_L1, self.dt, self.psd_floor)[window_start:window_end].copy()- meansegL)
-                wH_clean = (whiten.whiten(sig_only_H, psd_H1, self.dt, self.psd_floor)[window_start:window_end].copy()- meansegH)
+                wL_clean = (whiten.whiten(sig_only_L, psd_L1, self.dt, self.psd_floor)[window_start:window_end].copy()- meansegL)/normalization_scale
+                wH_clean = (whiten.whiten(sig_only_H, psd_H1, self.dt, self.psd_floor)[window_start:window_end].copy()- meansegH)/normalization_scale
                 #wL_clean = (whiten.whiten(filtfilt(b, a, sig_only_L), psd_L1, self.dt, self.psd_floor)[buffer:-buffer][w0:w1].copy()-meansegL)/stdsegshared
                 #wH_clean = (whiten.whiten(filtfilt(b, a, sig_only_H), psd_H1, self.dt, self.psd_floor)[buffer:-buffer][w0:w1].copy()-meansegH)/stdsegshared
            
@@ -969,7 +970,7 @@ class WaveformDataModule(LightningDataModule):
                  merger_out_prob=0.0, validation_epoch=10, p_higher_init=0.5, p_higher_fin=0.1,
                  snr_range_high=(10.0, 25.0), snr_range_low=(7.0, 15.0),
                  train_file="train.hdf", val_file="test.hdf",
-                 noise_is_whitened=False,
+                 noise_is_whitened=False, normalize_per_window_shared=False,
                  sample_rate=4096, band_low=25.0, band_high=450.0,
                  bandpass_order=4, psd_floor=1e-48, psd_outband=1e40):
         super().__init__()
@@ -996,6 +997,7 @@ class WaveformDataModule(LightningDataModule):
         self.train_file = train_file
         self.val_file = val_file
         self.noise_is_whitened = noise_is_whitened
+        self.normalize_per_window_shared = bool(normalize_per_window_shared)
         self.sample_rate = sample_rate
         self.band_low = band_low
         self.band_high = band_high
@@ -1009,7 +1011,7 @@ class WaveformDataModule(LightningDataModule):
                 self.noise_dir, self.data_dir, self.batch_size, dim=self.dim,
                 n_channels=self.n_channels, shuffle=True, train=True, gaussian=self.gaussian, noise_prob=self.noise_prob,
                 train_file=self.train_file, val_file=self.val_file,
-                noise_is_whitened=self.noise_is_whitened,
+                noise_is_whitened=self.noise_is_whitened, normalize_per_window_shared=self.normalize_per_window_shared,
                 initial_epoch=self.initial_epoch, segment_length=self.segment_length, edge_buffer=self.edge_buffer,
                 whitening_context_seconds=self.whitening_context_seconds, merger_out_prob=self.merger_out_prob,
                 p_higher_init=self.p_higher_init, p_higher_fin=self.p_higher_fin,
@@ -1022,7 +1024,7 @@ class WaveformDataModule(LightningDataModule):
                 self.noise_dir, self.data_dir, self.batch_size, dim=self.dim,
                 n_channels=self.n_channels, shuffle=False, train=False, gaussian=self.gaussian, noise_prob=self.noise_prob,
                 train_file=self.train_file, val_file=self.val_file,
-                noise_is_whitened=self.noise_is_whitened,
+                noise_is_whitened=self.noise_is_whitened, normalize_per_window_shared=self.normalize_per_window_shared,
                 initial_epoch=self.validation_epoch, segment_length=self.segment_length, edge_buffer=self.edge_buffer,
                 whitening_context_seconds=self.whitening_context_seconds, merger_out_prob=self.merger_out_prob, validation_epoch=self.validation_epoch,
                 p_higher_init=self.p_higher_init, p_higher_fin=self.p_higher_fin,
