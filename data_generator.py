@@ -251,7 +251,7 @@ class GWDataset(Dataset):
 
     def __init__(self, noise_dir, data_dir, batch_size=32, dim=2048, n_channels=2,
              shuffle=True, train=True, gaussian=False, noise_prob=0.6,
-             initial_epoch=1, segment_length=4096, edge_buffer=2048, merger_out_prob=0.2,
+             initial_epoch=1, segment_length=4096, edge_buffer=2048, merger_out_prob=0.2,whitening_context_seconds=None,
              validation_epoch=None, p_higher_init=0.5, p_higher_fin=0.05, snr_range_high=(10.0, 25.0), snr_range_low=(7.0, 15.0),
              train_file="train.hdf", val_file="test.hdf",
              noise_is_whitened=False, noise_range=None,
@@ -306,8 +306,9 @@ class GWDataset(Dataset):
         self.epoch = initial_epoch
         self.merger_out_prob = merger_out_prob
         self.fixed_epoch = validation_epoch
-        self.edge_buffer = edge_buffer
-        self.TRUNC = self.edge_buffer
+        self.edge_buffer = int(edge_buffer)
+        self.TRUNC = self.edge_buffer  # minimum required truncation per side
+        self.whitening_context_seconds = whitening_context_seconds
         self.train = train
         self.plotsamples = False
         self.noise_handlers = [h5py.File(p, "r") for p in self.noise_files]
@@ -480,6 +481,37 @@ class GWDataset(Dataset):
         self._psd_cache[keyH] = psd_H
 
         return psd_L, psd_H
+        
+    def _whitening_layout(self, signal_len):
+        signal_len = int(signal_len)
+        segment_length = int(self.segment_length)
+        min_trunc = int(self.TRUNC)
+
+        # Window-centered whitening needs enough context to contain:
+        #   full waveform + final 1 s model window + edge margins.
+        # For the usual BBH setup this is:
+        #   8192 + 4096 + 2*2048 = 16384 samples = 4 s.
+        min_required = int(signal_len + segment_length + 2 * min_trunc)
+
+        if self.whitening_context_seconds is None:
+            whiten_len = min_required
+        else:
+            whiten_len = int(round(float(self.whitening_context_seconds) * float(self.fs)))
+
+        if whiten_len < min_required:
+            raise ValueError(
+                "whitening_context_seconds is too short for window-centered whitening: "
+                f"got {whiten_len} samples ({whiten_len / float(self.fs):.6g} s), "
+                f"need at least {min_required} samples "
+                f"= signal_len({signal_len}) + segment_length({segment_length}) "
+                f"+ 2*TRUNC({min_trunc})."
+            )
+
+        usable_len = int(whiten_len - 2 * min_trunc)
+        trunc_left = int(min_trunc)
+        trunc_right = int(min_trunc)
+
+        return int(whiten_len), int(usable_len), int(trunc_left), int(trunc_right)
 
 
     def __data_generation_old(self, file_idx, sample_idx):
@@ -711,13 +743,24 @@ class GWDataset(Dataset):
         full_nH = nf['strain_H1']
     
         # ── slice noise once ─────────────────────────────────────
-        buffer = self.TRUNC
-        total_len = signal_len + 2 * buffer + self.segment_length
+        whiten_len, usable_len, trunc_left, trunc_right = self._whitening_layout(signal_len)
+        total_len = int(whiten_len)
+
+        if len(full_nL) < total_len or len(full_nH) < total_len:
+            raise ValueError(
+                f"Noise file too short for whitening context: need {total_len} samples, "
+                f"got L1={len(full_nL)}, H1={len(full_nH)}."
+            )
+
+        noise_start = np.random.randint(0, min(len(full_nL), len(full_nH)) - total_len + 1)
+        nL = np.asarray(full_nL[noise_start : noise_start + total_len], dtype=np.float64).copy()
+        nH = np.asarray(full_nH[noise_start : noise_start + total_len], dtype=np.float64).copy()
+
+        # Final model window is centered in the whitening context.
+        window_start = int((total_len - self.segment_length) // 2)
+        window_start = max(0, min(window_start, total_len - self.segment_length))
+        window_end = int(window_start + self.segment_length)
         
-        noise_start = np.random.randint(0, len(full_nL) - total_len)
-        nL = full_nL[noise_start : noise_start + total_len]
-        nH = full_nH[noise_start : noise_start + total_len]
-    
     
         '''# ── inject signal ────────────────────────────
         if inject_signal:
@@ -799,38 +842,29 @@ class GWDataset(Dataset):
             snr = target_snr  
 
             # inject scaled signal into noise
-            min_inject = buffer
-            max_inject = total_len - signal_len - buffer
-            inject_idx = np.random.randint(min_inject, max_inject)
-            inj_end    = inject_idx + signal_len
+            # Inject the waveform so that the merger lands in the second half
+            # of the fixed, window-centered 1 s model crop.
+            #
+            # With the _whitening_layout minimum above, this range should always
+            # be non-empty for the intended waveform/context geometry.
+            feasible_rel_min = max(self.segment_length // 2,shared_merg - window_start)
+            feasible_rel_max = min(self.segment_length - 1,total_len - signal_len + shared_merg - window_start)
+
+            rel_merger_pos = int(np.random.randint(feasible_rel_min, feasible_rel_max + 1))
+            inject_idx = int(window_start + rel_merger_pos - shared_merg)
+            inj_end = int(inject_idx + signal_len)
+
             nL[inject_idx:inj_end] += raw_L1
             nH[inject_idx:inj_end] += raw_H1
 
     
-        # ── whiten + band-pass  ────────────────────
-        b, a = self._butter
-        #wL = whiten.whiten(filtfilt(b, a, nL), psd_L1, self.dt, self.psd_floor)[buffer:-buffer]
-        #wH = whiten.whiten(filtfilt(b, a, nH), psd_H1, self.dt, self.psd_floor)[buffer:-buffer]
-        wL = whiten.whiten(nL, psd_L1, self.dt)[buffer:-buffer] 
-        wH = whiten.whiten(nH, psd_H1, self.dt)[buffer:-buffer]
-        #wL = filtfilt(b, a, whiten.whiten(nL, psd_L1, self.dt))[buffer:-buffer] #filter high frequency artifacts from injection after whitening
-        #wH = filtfilt(b, a, whiten.whiten(nH, psd_H1, self.dt))[buffer:-buffer]
-        
-        # ── pick window around merger ──────────────────────────────
-        if inject_signal:
-            bp_merger_idx  = inject_idx + shared_merg - buffer
-            rel_merger_pos = np.random.randint(self.segment_length//2, self.segment_length)
-            w0 = bp_merger_idx - rel_merger_pos
-        else:
-            max_start = len(wL) - self.segment_length
-            w0 = np.random.randint(0, max_start + 1)
-    
-        w0 = max(0, min(w0, len(wL) - self.segment_length))
-        w1 = w0 + self.segment_length
-        
-        segL = wL[w0:w1]
-        segH = wH[w0:w1]
-        
+        # ── whiten fixed context and crop centered model window ───
+        wL_full = whiten.whiten(nL, psd_L1, self.dt, self.psd_floor)
+        wH_full = whiten.whiten(nH, psd_H1, self.dt, self.psd_floor)
+
+        segL = np.asarray(wL_full[window_start:window_end], dtype=np.float64)
+        segH = np.asarray(wH_full[window_start:window_end], dtype=np.float64)        
+
         # remove tiny DC offsets per window
         meansegL=np.mean(segL)
         meansegH=np.mean(segH)
@@ -900,9 +934,9 @@ class GWDataset(Dataset):
 
     
         if inject_signal:
-            rel_merger = bp_merger_idx - w0
+            rel_merger = int(rel_merger_pos)
             y[max(0, rel_merger - self.label_width): rel_merger, 0] = 1.0
-    
+            
         # ── plotting extras ──────────────────────────────────────
         if plot_samples:
             if inject_signal:
@@ -912,8 +946,8 @@ class GWDataset(Dataset):
     
                 #wL_clean = (filtfilt(b, a, whiten.whiten(sig_only_L, psd_L1, self.dt))[buffer:-buffer][w0:w1].copy()-meansegL)/stdsegshared
                 #wH_clean = (filtfilt(b, a, whiten.whiten(sig_only_H, psd_H1, self.dt))[buffer:-buffer][w0:w1].copy()-meansegH)/stdsegshared
-                wL_clean = whiten.whiten(sig_only_L, psd_L1, self.dt)[buffer:-buffer][w0:w1].copy()-meansegL
-                wH_clean = whiten.whiten(sig_only_H, psd_H1, self.dt)[buffer:-buffer][w0:w1].copy()-meansegH
+                wL_clean = (whiten.whiten(sig_only_L, psd_L1, self.dt, self.psd_floor)[window_start:window_end].copy()- meansegL)
+                wH_clean = (whiten.whiten(sig_only_H, psd_H1, self.dt, self.psd_floor)[window_start:window_end].copy()- meansegH)
                 #wL_clean = (whiten.whiten(filtfilt(b, a, sig_only_L), psd_L1, self.dt, self.psd_floor)[buffer:-buffer][w0:w1].copy()-meansegL)/stdsegshared
                 #wH_clean = (whiten.whiten(filtfilt(b, a, sig_only_H), psd_H1, self.dt, self.psd_floor)[buffer:-buffer][w0:w1].copy()-meansegH)/stdsegshared
            
@@ -931,7 +965,7 @@ class GWDataset(Dataset):
 class WaveformDataModule(LightningDataModule):
     def __init__(self, noise_dir, data_dir, batch_size=32, dim=1024, n_channels=2,
                  shuffle=True, gaussian=False, noise_prob=0.7, noise_range=None,
-                 num_workers=1, initial_epoch=0, segment_length=4096, edge_buffer=2048,
+                 num_workers=1, initial_epoch=0, segment_length=4096, edge_buffer=2048, whitening_context_seconds=None,
                  merger_out_prob=0.0, validation_epoch=10, p_higher_init=0.5, p_higher_fin=0.1,
                  snr_range_high=(10.0, 25.0), snr_range_low=(7.0, 15.0),
                  train_file="train.hdf", val_file="test.hdf",
@@ -952,6 +986,7 @@ class WaveformDataModule(LightningDataModule):
         self.initial_epoch = initial_epoch
         self.segment_length = segment_length
         self.edge_buffer = edge_buffer
+        self.whitening_context_seconds = whitening_context_seconds
         self.merger_out_prob = merger_out_prob
         self.validation_epoch = validation_epoch
         self.p_higher_init=p_higher_init
@@ -976,7 +1011,7 @@ class WaveformDataModule(LightningDataModule):
                 train_file=self.train_file, val_file=self.val_file,
                 noise_is_whitened=self.noise_is_whitened,
                 initial_epoch=self.initial_epoch, segment_length=self.segment_length, edge_buffer=self.edge_buffer,
-                merger_out_prob=self.merger_out_prob,
+                whitening_context_seconds=self.whitening_context_seconds, merger_out_prob=self.merger_out_prob,
                 p_higher_init=self.p_higher_init, p_higher_fin=self.p_higher_fin,
                 snr_range_high=self.snr_range_high, snr_range_low=self.snr_range_low,
                 sample_rate=self.sample_rate, band_low=self.band_low, band_high=self.band_high,
@@ -989,7 +1024,7 @@ class WaveformDataModule(LightningDataModule):
                 train_file=self.train_file, val_file=self.val_file,
                 noise_is_whitened=self.noise_is_whitened,
                 initial_epoch=self.validation_epoch, segment_length=self.segment_length, edge_buffer=self.edge_buffer,
-                merger_out_prob=self.merger_out_prob, validation_epoch=self.validation_epoch,
+                whitening_context_seconds=self.whitening_context_seconds, merger_out_prob=self.merger_out_prob, validation_epoch=self.validation_epoch,
                 p_higher_init=self.p_higher_init, p_higher_fin=self.p_higher_fin,
                 snr_range_high=self.snr_range_high, snr_range_low=self.snr_range_low,
                 sample_rate=self.sample_rate, band_low=self.band_low, band_high=self.band_high,
