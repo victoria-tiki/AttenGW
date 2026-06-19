@@ -94,8 +94,9 @@ training:
   dim: 1024
   segment_length: 4096
   edge_buffer: 2048
-  whitening_context_seconds: 32.0
+  whitening_context_seconds: 8.0
   noise_prob: 0.60
+  normalize_per_window_shared: true
 
   # Advanced curriculum settings; usually leave unchanged.
   p_higher_init: 0.90
