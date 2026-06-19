@@ -171,6 +171,7 @@ def load_train_config(config_path):
         "dim": training["dim"],
         "segment_length": training["segment_length"],
         "edge_buffer": training["edge_buffer"],
+        "whitening_context_seconds": training.get("whitening_context_seconds", None),
         "noise_prob": training["noise_prob"],
         "p_higher_init": training["p_higher_init"],
         "p_higher_fin": training["p_higher_fin"],
@@ -317,6 +318,7 @@ def plot_samples(args, rank: int) -> None:
         snr_range_low=args.snr_range_low,
         segment_length=args.segment_length,
         edge_buffer=args.edge_buffer,
+        whitening_context_seconds=args.whitening_context_seconds,
         dim=args.dim,
         train_file=args.train_file,
         val_file=args.val_file,
@@ -397,6 +399,7 @@ def main():
     parser.add_argument('--segment_length', type=int, default=4096, help='segment length fed to the model')
     parser.add_argument('--dim', type=int, default=1024, help='how many samples before merger at labeled as belonging to the signal class')
     parser.add_argument('--edge_buffer', type=int, default=2048, help='Number of samples trimmed from each side after whitening/filtering to reduce edge artifacts.')
+    parser.add_argument("--whitening_context_seconds",type=float,default=None,help=("Total raw context length, in seconds, passed to FFT whitening. Must fit max(signal_len, segment_length) plus 2*edge_buffer. If unset, uses the minimum valid context."),)
     parser.add_argument('--sample_rate', type=int, default=4096, help='Sampling rate in Hz; should match the injection and noise files.')
     parser.add_argument('--band_low', type=float, default=25.0, help='Low-frequency cutoff used in dataloader whitening/band-limiting.')
     parser.add_argument('--band_high', type=float, default=450.0, help='High-frequency cutoff used in dataloader whitening/band-limiting.')
@@ -464,8 +467,8 @@ def main():
         enable_progress_bar=True,
         enable_model_summary=True,
         callbacks=callbacks,
-        # limit_train_batches=0.0001,
-        # limit_val_batches=0.0001,
+        #limit_train_batches=0.001,
+        #limit_val_batches=0.01,
     )
 
     model = LightningModel(lr=args.lr_init, internal_epoch=args.initial_epoch, model_name=args.model_name, model_kwargs=args.model_kwargs)
@@ -478,6 +481,7 @@ def main():
         dim=args.dim,
         segment_length=args.segment_length,
         edge_buffer=args.edge_buffer,
+        whitening_context_seconds=args.whitening_context_seconds,
         noise_prob=args.noise_prob,
         num_workers=args.num_workers,
         p_higher_init=args.p_higher_init,
