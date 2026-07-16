@@ -52,6 +52,7 @@ download:
   target_plot_fs: 1024.0
 
   # Advanced cleaning/QC settings.
+  rms_glitch_scope: noise
   event_pad_s: 30.0
   glitch_sigma: 5.0
   glitch_max_frac: 0.01
