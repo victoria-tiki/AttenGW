@@ -72,6 +72,8 @@ def parse_args(defaults=None, argv=None):
     )
 
     # aggressive raw-domain cleaning / vetos
+    parser.add_argument("--rms_glitch_scope", choices=["noise", "signal", "both", "neither"], default="noise",
+                        help="Apply glitch cleaning/rejection and the H1/L1 std-ratio criterion to noise, signal, both, or neither.")
     parser.add_argument("--glitch_sigma", type=float, default=None,
                         help="If set, clamp / interpolate samples |x| > glitch_sigma * robust_sigma (MAD-based).")
     parser.add_argument("--glitch_max_frac", type=float, default=0.01,
@@ -81,10 +83,7 @@ def parse_args(defaults=None, argv=None):
     parser.add_argument("--min_raw_std", type=float, default=None,
                         help="If set, reject window if per-IFO std(raw) after glitch-cleaning is below this.")
     parser.add_argument("--max_std_ratio", type=float, default=None,
-                        help=(
-                            "If set, reject window if std(H1)/std(L1) or its inverse "
-                            "exceeds this value (i.e., extreme H1/L1 imbalance)."
-                        ))
+                        help="If set, reject window if std(H1)/std(L1) or its inverse exceeds this value (i.e., extreme H1/L1 imbalance).")
 
     # plotting / whitening
     parser.add_argument("--plot_timeline", action="store_true",
@@ -133,6 +132,7 @@ def load_download_config(config_path):
         "plot_timeseries": bool(download["plot_timeseries"]),
         "plot_psd": bool(download["plot_psd"]),
         "target_plot_fs": download["target_plot_fs"],
+        "rms_glitch_scope": download.get("rms_glitch_scope", "noise"),
         "glitch_sigma": download["glitch_sigma"],
         "glitch_max_frac": download["glitch_max_frac"],
         "max_std_ratio": download["max_std_ratio"],
@@ -479,7 +479,7 @@ def clamp_glitches(vals, sigma=8.0, max_frac=0.01):
     return vals_clipped, frac_bad, False
 
 
-def download_and_save_window(ifo_list, start, end, sample_rate, mode, output_dir, amp_thresh=None, rms_thresh=None, whiten=False, glitch_sigma=None, glitch_max_frac=0.01, max_raw_std=None, min_raw_std=None, max_std_ratio=None, band_low=25.0, band_high=450.0, bandpass_order=4, psd_seglen_s=4.0, event_gps=None, event_names=None, requested_window_len_s=None, saved_window_len_s=None):
+def download_and_save_window(ifo_list, start, end, sample_rate, mode, output_dir, amp_thresh=None, rms_thresh=None, whiten=False, rms_glitch_scope="noise", glitch_sigma=None, glitch_max_frac=0.01, max_raw_std=None, min_raw_std=None, max_std_ratio=None, band_low=25.0, band_high=450.0, bandpass_order=4, psd_seglen_s=4.0, event_gps=None, event_names=None, requested_window_len_s=None, saved_window_len_s=None):
     """
     Download H1/L1 for [start, end), optionally apply:
       - glitch clamping in full band (raw domain),
@@ -498,6 +498,17 @@ def download_and_save_window(ifo_list, start, end, sample_rate, mode, output_dir
     bool
         True if the window was accepted and saved, False if rejected.
     """
+    
+    apply_rms_glitch = (
+        rms_glitch_scope == "both"
+        or rms_glitch_scope == mode
+    )
+    
+    if not apply_rms_glitch:
+        glitch_sigma = None
+        max_std_ratio = None
+        
+    
     raw_data   = {}
     proc_data  = {}
     psd_vals   = {}
@@ -712,7 +723,7 @@ def download_signal_with_optional_shrink(ifos, event_gps, event_names, requested
         e = s + window_len_s
         print(f"Trying signal window centered on event_gps={event_gps:.3f}: {s:.1f}–{e:.1f} ({window_len_s:g} s); events={event_names}", flush=True)
 
-        downloaded = download_and_save_window(ifos, s, e, args.sample_rate, mode="signal", output_dir=args.output_dir, amp_thresh=None, rms_thresh=None, whiten=args.whiten, glitch_sigma=None, glitch_max_frac=args.glitch_max_frac, max_raw_std=None, min_raw_std=None, max_std_ratio=None, band_low=args.band_low, band_high=args.band_high, bandpass_order=args.bandpass_order, psd_seglen_s=args.psd_seglen_s, event_gps=event_gps, event_names=event_names, requested_window_len_s=requested_window_len_s, saved_window_len_s=window_len_s)
+        downloaded = download_and_save_window(ifos, s, e, args.sample_rate, mode="signal", output_dir=args.output_dir, amp_thresh=None, rms_thresh=None, whiten=args.whiten, glitch_sigma=args.glitch_sigma, glitch_max_frac=args.glitch_max_frac, max_raw_std=None, min_raw_std=None, max_std_ratio=args.max_std_ratio, rms_glitch_scope=args.rms_glitch_scope, band_low=args.band_low, band_high=args.band_high, bandpass_order=args.bandpass_order, psd_seglen_s=args.psd_seglen_s, event_gps=event_gps, event_names=event_names, requested_window_len_s=requested_window_len_s, saved_window_len_s=window_len_s)
 
         if downloaded:
             print(f"[ACCEPT SIGNAL] event_gps={event_gps:.3f}; saved centered window length={window_len_s:g} s; events={event_names}", flush=True)
@@ -881,6 +892,7 @@ def main():
     
     os.makedirs(args.output_dir, exist_ok=True)
     
+
     print("Starting downloader", flush=True)
     print(f"Mode: {args.mode}", flush=True)
     print(f"GPS range: {args.gps_start} to {args.gps_end}", flush=True)
@@ -947,6 +959,7 @@ def main():
                 max_raw_std=args.max_raw_std,
                 min_raw_std=args.min_raw_std,
                 max_std_ratio=args.max_std_ratio,
+                rms_glitch_scope=args.rms_glitch_scope,
                 band_low=args.band_low,
                 band_high=args.band_high,
                 bandpass_order=args.bandpass_order,
