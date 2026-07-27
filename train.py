@@ -425,7 +425,9 @@ def main():
             "Missing required argument(s): "
             + ", ".join(f"--{name}" for name in missing)
             + ". Provide them directly or use --config."
-        )    
+        )  
+
+    args.noise_dir = os.path.join(args.noise_dir, "train")
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
