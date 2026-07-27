@@ -37,37 +37,43 @@ paths:
 
 
 download:
-  # Commonly changed.
-  gps_start: 1248652818
-  gps_end: 1249862418
   window_len_s: 4096
-  n_segments: 5
-  mode: noise               # options: noise, signal, both
-  require_full_window: true
+  min_window_len_s: 64.0
 
-  # Optional diagnostic outputs.
+  train_noise:
+    enabled: true
+    gps_start: 1263081618
+    gps_end: 1264291218
+    n_segments: 32
+
+    event_pad_s: 30.0
+    glitch_sigma: 7.0
+    glitch_max_frac: 0.001
+    max_std_ratio: 20.0
+
+    amp_thresh:
+    rms_thresh:
+    max_raw_std:
+    min_raw_std:
+
+  test:
+    gps_start: 1264291218
+    gps_end: 1267056018
+
+    noise:
+      enabled: true
+      n_segments:
+
+    signal:
+      enabled: true
+      n_events:
+
   plot_timeline: true
   plot_timeseries: true
   plot_psd: true
   target_plot_fs: 1024.0
-
-  # Advanced cleaning/QC settings.
-  rms_glitch_scope: noise
-  event_pad_s: 30.0
-  glitch_sigma: 5.0
-  glitch_max_frac: 0.01
-  max_std_ratio: 10.0
   psd_seglen_s: 4.0
 
-  # Signal-only window-shortening fallback.
-  allow_signal_window_shrink: true
-  min_signal_window_len_s: 64.0
-
-  # Optional extra QC thresholds. Leave blank to disable.
-  amp_thresh:
-  rms_thresh:
-  max_raw_std:
-  min_raw_std:
 
 model:
 # Available models:
