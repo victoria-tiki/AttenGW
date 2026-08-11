@@ -1598,12 +1598,10 @@ def validate_runtime_args(args):
         if int(args.test_gps_start) >= int(args.test_gps_end):
             raise ValueError("test_gps_start must be earlier than test_gps_end.")
     if args.train_noise_enabled and args.test_enabled:
-        if max(int(args.train_gps_start), int(args.test_gps_start)) < min(
-            int(args.train_gps_end), int(args.test_gps_end)
-        ):
+        if int(args.test_gps_start) < int(args.train_gps_end):
             raise ValueError(
-                "Enabled train and test GPS ranges overlap. "
-                "Use disjoint times to avoid train/test leakage."
+                "Test data must begin at or after the end of training data "
+                "to avoid train/test leakage."
             )
 
 
