@@ -487,8 +487,8 @@ def estimate_psd(strain, fs, seglen_s=4.0):
         nperseg=nperseg,
         noverlap=noverlap,
         detrend="constant",
-        scaling="density",   
-        average="mean",
+        scaling="density",
+        average="median",
     )
     return freqs, Pxx
 
@@ -819,6 +819,7 @@ def download_and_save_window(
         f.attrs["band_high"] = band_high
         f.attrs["bandpass_order"] = bandpass_order
         f.attrs["psd_seglen_s"] = psd_seglen_s
+        f.attrs["psd_average"] = "median"
         f.attrs["gps_start"] = start
         f.attrs["gps_end"] = end
 
@@ -1631,6 +1632,10 @@ def main():
     print(
         f"Band/QC range: {args.band_low}–{args.band_high} Hz, "
         f"order {args.bandpass_order}",
+        flush=True,
+    )
+    print(
+        f"PSD: Welch {args.psd_seglen_s:g} s segments, 50% overlap, median averaging",
         flush=True,
     )
 
