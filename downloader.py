@@ -1471,10 +1471,11 @@ def run_test_download(args, ifos, test_root, noise_output_dir, signal_output_dir
     print("\n=== TEST DOWNLOAD ===", flush=True)
     print(f"GPS range: {gps_start} to {gps_end}", flush=True)
     print(f"Test root: {test_root}", flush=True)
-
+    
     good_intervals, cleaned_noise_intervals = get_coincident_noise_intervals(
-        args, gps_start, gps_end, event_pad_s=None
+        args, gps_start, gps_end, event_pad_s=args.event_pad_s
     )
+    
     event_rows = get_unique_events_in_range(gps_start, gps_end, dedup_tol_s=1.0)
     event_times = [row["gps"] for row in event_rows]
 
