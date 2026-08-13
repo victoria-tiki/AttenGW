@@ -1170,7 +1170,7 @@ def process_test_noise_chunk(
 
 def plot_timeline_all(gps_start, gps_end, noise_intervals, event_times, output_dir):
     def gps_to_mpl(gps):
-        t = Time(gps, format='gps')
+        t = Time(gps, format='gps').utc
         return mdates.date2num(t.datetime)
 
     # Merge intervals so each region is drawn once
@@ -1264,7 +1264,7 @@ def plot_timeline_saved(gps_start, gps_end, saved_noise_windows, saved_signal_wi
     Plot ONLY the windows we saved.
     """
     def gps_to_mpl(gps):
-        t = Time(gps, format='gps')
+        t = Time(gps, format='gps').utc
         return mdates.date2num(t.datetime)
 
     start_num = gps_to_mpl(gps_start)
