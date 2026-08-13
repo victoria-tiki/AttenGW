@@ -453,7 +453,7 @@ def pick_windows_from_intervals(intervals, window_len, require_full=False):
 
 # ---------- PSD + whitening helpers ----------
 
-def estimate_psd(strain, fs, seglen_s=4.0):
+def estimate_psd(strain, fs, seglen_s=4.0, average="median"):
     """
     Estimate a one-sided PSD using Welch's method.
 
@@ -488,7 +488,7 @@ def estimate_psd(strain, fs, seglen_s=4.0):
         noverlap=noverlap,
         detrend="constant",
         scaling="density",
-        average="median",
+        average=average,
     )
     return freqs, Pxx
 
@@ -750,9 +750,10 @@ def download_and_save_window(
         # Training PSD/whitening uses the cleaned strain, exactly as before.
         # Test PSD is descriptive and uses the untouched raw strain.
         psd_source = vals_for_processing if qc_policy == "enforce" else vals_raw
-        freqs_psd, pxx = estimate_psd(
-            psd_source, fs=sample_rate, seglen_s=psd_seglen_s
+        freqs_psd, pxx = estimate_psd(psd_source, fs=sample_rate, seglen_s=psd_seglen_s,
+            average="mean" if qc_policy == "enforce" else "median",
         )
+
         proc = (
             whiten_with_psd(psd_source, freqs_psd, pxx, fs=sample_rate)
             if whiten else psd_source
