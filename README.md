@@ -185,4 +185,4 @@ requirements.txt            Python dependencies
 
 ## Data and checkpoints
 
-Large training, validation, noise, and checkpoint files are not stored in the repository. Generate or download them locally and point the config paths to their location. Small example datasets are provided in `/example_data`. These are to be used for testing only (see [`docs/data.md`](docs/data.md)).
+Large training, validation, or noise files are not stored in the repository. Generate or download them locally and point the config paths to their location. Small example datasets are provided in `/example_data`. These are to be used for testing only (see [`docs/data.md`](docs/data.md)). Selected pretrained O3b checkpoints are provided for testing and inference in ```/checkpoints```.
