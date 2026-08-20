@@ -52,7 +52,7 @@ At minimum, set:
 
 ```yaml
 paths:
-  data_dir: /path/to/train_test_hdf_dir
+  data_dir: /path/to/train_val_hdf_dir
   noise_dir: /path/to/noise_dir
   checkpoint_dir: /path/to/checkpoints_dir
 
