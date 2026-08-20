@@ -5,12 +5,12 @@ This repository expects two kinds of data:
 1. injection files containing clean detector-projected waveforms, used as signal examples;
 2. noise files containing detector strain and PSDs, used by the dataloader to construct signal+noise and noise-only training examples.
 
-A small example dataset is included under:
+Injections and noise should be sampled at the same rate. A small example dataset is included under:
 
 ```text
 example_data/
-  signal/
-  noise/
+  train_val_hdf_dir/
+  noise_dir/
 ```
 
 These files are intended only for smoke tests and basic end-to-end checks. They are not the full dataset used for paper-scale training.
@@ -36,7 +36,7 @@ Example:
 
 ```yaml
 paths:
-  data_dir: example_data/signal
+  data_dir: example_data/train_val_hdf_dir
 
 training:
   train_file: train_tiny.hdf
@@ -54,7 +54,7 @@ and expects both files to contain `/data/H1_wave` and `/data/L1_wave`.
 
 ## Included tiny injection files
 
-The example injection files in `example_data/signal/` contain synthetic detector-projected compact-binary waveforms. They are provided so that users can test the repository without downloading or generating a full injection dataset.
+The example injection files in `example_data/train_val_hdf_dir/` contain synthetic detector-projected compact-binary waveforms. They are provided so that users can test the repository without downloading or generating a full injection dataset.
 
 These files are for testing only. They are not intended to reproduce the training distribution or results of the paper.
 
@@ -83,7 +83,19 @@ The waveforms were projected onto H1 and L1 using the detector response. The fil
 
 ## Noise file format
 
-Noise files should be HDF5 files with the following structure:
+`noise_dir` should use the following directory structure:
+
+```text
+noise_dir/
+├── train/
+└── test/
+    ├── noise/
+    └── signal/
+```
+
+Training noise files belong in `train/`, held-out background files in `test/noise/`, and real-event windows in `test/signal/`.
+
+Each HDF5 file should contain:
 
 ```text
 /strain_H1
@@ -93,36 +105,11 @@ Noise files should be HDF5 files with the following structure:
 /freqs
 ```
 
-The downloader script writes files in this format.
-
-For the default dataloader path:
-
-```yaml
-shared:
-  noise_is_whitened: false
-```
-
-the noise strain datasets should contain raw, unwhitened strain:
-
-```text
-/strain_H1
-/strain_L1
-```
-
-The dataloader then uses the saved PSDs to whiten and band-limit the data internally.
-
-For the legacy dataloader path:
-
-```yaml
-shared:
-  noise_is_whitened: true
-```
-
-the noise strain datasets should already be whitened. The PSD datasets are still required because the dataloader uses them to whiten the injected clean signals.
+The downloader script writes files in this format. The noise strain datasets should contain raw, unwhitened strain (saved using `noise_is_whitened: false`). The dataloader then uses the saved PSDs to whiten and band-limit the data internally. 
 
 ## Included tiny noise file
 
-The example noise file in `example_data/noise/` is a short raw-noise file intended for smoke testing. It is approximately 60 seconds long and contains:
+The example detector data under `example_data/noise_dir/` follow the same directory structure expected for normal runs. The example includes three 6-minute training-noise windows, three 6-minute test-noise windows, and three windows centered on cataloged events. 
 
 ```text
 /strain_H1
@@ -131,8 +118,9 @@ The example noise file in `example_data/noise/` is a short raw-noise file intend
 /psd_L1
 /freqs
 ```
+The files also store metadata describing the GPS interval, dataset split, sample rate, preprocessing and PSD settings, requested and saved window lengths, quality-control measurements and flags, and, where applicable, the event name and GPS time.
 
-The accompanying plots in the same folder are diagnostic outputs from the downloader, such as PSD and timeline plots. They are included only to show what the downloader produces and to make the example data easier to inspect.
+The accompanying timeline, time-series, and PSD plots are diagnostic outputs from the downloader and are included to make the example data easier to inspect.
 
 ## Running a small test with the example data
 
@@ -140,16 +128,13 @@ To run a small local or SLURM test using the included example files, edit the co
 
 ```yaml
 paths:
-  data_dir: example_data/signal
-  noise_dir: example_data/noise
+  data_dir: example_data/train_val_hdf_dir
+  noise_dir: example_data/noise_dir
   checkpoint_dir: checkpoints
 
 training:
   train_file: train_tiny.hdf
   val_file: val_tiny.hdf
-
-shared:
-  noise_is_whitened: false
 ```
 
 Then run training with:

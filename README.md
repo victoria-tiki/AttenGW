@@ -8,7 +8,7 @@ The results of this pipeline are further described in [arXiv:2512.12513](https:/
 
 ---
 
-## Basic usage
+##1. Basic usage
 
 The basic workflow is:
 
@@ -19,7 +19,7 @@ The basic workflow is:
 5. run inference on downloader-produced HDF5 files using a trained checkpoint.
 --- 
 
-## Installation
+##2. Installation
 
 Python 3.10 or newer is recommended. The code has been tested with Python 3.11.
 
@@ -40,7 +40,7 @@ PyTorch Lightning 2.6.1
 
 ---
 
-## Configure paths and parameters
+##3. Configure paths and parameters
 
 Edit:
 
@@ -114,7 +114,7 @@ See [`docs/config.md`](docs/config.md) and [`docs/data.md`](docs/data.md) for de
 
 ---
 
-## Download real detector noise
+##4. Download real detector noise
 
 To download training noise and, optionally, held-out noise or catalog-event windows, configure the corresponding entries under `download` in `configs/example.yaml`, then run:
 
@@ -134,7 +134,7 @@ See [`docs/config.md`](docs/config.md) for downloader configuration options to b
 
 ---
 
-## Train
+##5. Train
 
 Training is much faster on a GPU. For full training runs, use:
 
@@ -154,7 +154,7 @@ See [`docs/config.md`](docs/config.md) for an overview of training parameters to
 
 ---
 
-## Inference
+##6. Inference
 
 After training, use the inference script to run a trained checkpoint on a downloader-produced HDF5 file and report human-readable trigger times.
 
@@ -194,7 +194,7 @@ The script saves trigger summaries and optional diagnostic plots to the configur
 ---
 
 
-## Repository map
+##7. Repository map
 
 ```text
 configs/              Download, training, and inference configurations
@@ -210,7 +210,7 @@ train.py              PyTorch Lightning training entry point
 requirements.txt      Python dependencies
 ```
 
-## Data and checkpoints
+##8. Data and checkpoints
 
 Large signal or noise files are not stored in the repository. Generate or download them locally and point the config paths to their location. 
 
