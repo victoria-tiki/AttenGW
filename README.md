@@ -216,4 +216,4 @@ Large signal or noise files are not stored in the repository. Generate or downlo
 
 Small example datasets are provided in `example_data/`. These are to be used for testing and inspection (see [`docs/data.md`](docs/data.md)). 
 
-Selected pretrained runs, including their saved configurations and checkpoints, are provided under `checkpoints/` for testing and inference.
+The `checkpoints/` directory contains the four independently trained checkpoints and config files trained and used for the February 2020 O3b evaluation described in the [AttenGW paper](https://arxiv.org/abs/2512.12513).
