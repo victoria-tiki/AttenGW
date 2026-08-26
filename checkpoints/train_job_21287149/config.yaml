@@ -1,0 +1,82 @@
+shared:
+  # Must match between downloaded noise files and training.
+  sample_rate: 4096
+  noise_is_whitened: false
+
+  # Change only if you know noise psd properties.
+  band_low: 25.0
+  band_high: 450.0
+  bandpass_order: 4
+  psd_floor: 1.0e-48
+  psd_outband: 1.0e40
+
+
+paths:
+  data_dir: /path/to/train_test_hdf_dir
+  noise_dir: /path/to/noise_dir
+  checkpoint_dir: /path/to/checkpoints_dir
+
+
+download:
+  window_len_s: 4096
+  min_window_len_s: 64.0
+
+  train_noise:
+    enabled: false
+    gps_start: 1263081618
+    gps_end: 1264204818
+    n_segments: 
+
+    event_pad_s: 30.0
+    glitch_sigma: 7.0
+    glitch_max_frac: 0.001
+    max_std_ratio: 20.0
+
+    amp_thresh:
+    rms_thresh:
+    max_raw_std:
+    min_raw_std:
+
+  test:
+    gps_start: 1264204818
+    gps_end: 1267056018
+
+    noise:
+      enabled: false
+      n_segments:
+
+    signal:
+      enabled: true
+      n_events:
+
+  plot_timeline: true
+  plot_timeseries: true
+  plot_psd: true
+  target_plot_fs: 1024.0
+  psd_seglen_s: 4.0
+  
+
+model:
+  name: model_tcn_earlyfusion
+
+training:
+  train_file: train.hdf
+  val_file: val.hdf
+  batch_size: 32
+  num_workers: 8
+  lr_init: 0.001
+  max_epochs: 75
+
+  # Data/label settings.
+  dim: 1024
+  segment_length: 4096
+  edge_buffer: 2048
+  whitening_context_seconds: 8.0
+  normalize_per_window_shared: true
+
+  # Advanced curriculum settings; usually leave unchanged.
+  noise_prob: 0.65
+  p_higher_init: 0.9
+  p_higher_fin: 0.25
+  snr_range_high: [10.0, 25.0]
+  snr_range_low: [3.0, 10.0]
