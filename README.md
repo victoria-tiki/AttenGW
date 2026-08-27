@@ -122,7 +122,7 @@ To download training noise and, optionally, held-out noise or catalog-event wind
 python downloader.py --config configs/example.yaml
 ```
 
-Optional SLURM usage:
+Optional SLURM usage (edit `submit_download.slurm` to adapt it to your clusters specifications):
 
 ```bash
 sbatch scripts/submit_download.slurm
@@ -136,7 +136,7 @@ See [`docs/config.md`](docs/config.md) for downloader configuration options to b
 
 ## 5. Train
 
-Training is much faster on a GPU. For full training runs, use:
+Training is much faster on a GPU. For full training runs, edit `submit_train.slurm` to adapt it to your cluster's specifications, and run:
 
 ```bash
 sbatch scripts/submit_train.slurm
@@ -183,7 +183,7 @@ Run locally with:
 ```
 python inference/infer.py --config configs/inference_example.yaml
 ```
-Optional SLURM usage:
+SLURM usage (edit `submit_infer.slurm` to adapt it to your cluster's specification):
 
 ```
 sbatch scripts/submit_infer.slurm

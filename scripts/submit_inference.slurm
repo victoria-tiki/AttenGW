@@ -24,7 +24,7 @@ python -c "import yaml" 2>/dev/null || pip install --user pyyaml
 BASE_OUTPUT_DIR=$(python - "$CONFIG" <<'PY'
 import sys, yaml
 cfg = yaml.safe_load(open(sys.argv[1]))
-print(cfg["output"]["output_dir"])
+print(cfg["paths"]["output_dir"])
 PY
 )
 

@@ -1,101 +1,57 @@
 # Basic AttenGW inference example.
-# This runs inference on one downloader-produced HDF5 file and prints human-readable triggers.
 
-checkpoint:
-  # Training run folder produced by scripts/submit_train.slurm.
-  # This folder should contain:
-  #   config.yaml
-  #   one or more .ckpt files
-  run_dir: /path/to/checkpoints/train_job_123456
+paths:
+  # Directory with hdf noise and signal files which to evaluate (ideally, supplied by the downloader).
+  input_dir: /path/to/evaluation/files
 
-  # Optional. Leave blank to automatically use the newest .ckpt in run_dir.
-  ckpt_path:
+  # Base output directory.
+  output_dir: /path/to/inference/output
 
+  # Set exactly one of checkpoint_dir or checkpoint.
+  checkpoint_dir: /path/to/train_job
+  checkpoint:
 
-input:
-  # One downloader-produced HDF5 file OR a glob pattern.
-  # Expected datasets in file(s):
-  #   /strain_H1
-  #   /strain_L1
-  #   /psd_H1
-  #   /psd_L1
-  #   /freqs
-  #
-  # Expected attrs include:
-  #   gps_start, gps_end, mode, whiten, sample_rate,
-  #   band_low, band_high, bandpass_order, psd_seglen_s
-  
-  # Examples:
-  #   /path/to/noise_raw_1248842661_1248846757.hdf5  (1 file to run inference on)
-  #   /path/to/noise/*.hdf5  (glob file pattern to run inference on)
-  path: /path/to/noise_or_signal_file.hdf5
-
-output:
-  # Inference outputs are written here.
-  # The SLURM submission script creates one infer_job_<jobid>/ subfolder inside this directory.
-  output_dir: /path/to/inference_outputs
-
-  # If true, saves plots to output_dir/plots/.
-  make_plot: true
-
-  # If true, only saves plots for threshold/width combinations where triggers are found.
-  plot_only_if_triggers: false
-
-  # If true, saves raw model predictions as .npz files.
-  # Usually leave false unless debugging.
-  save_predictions: false
-
+  # Required only when asd_mismatch.enabled is true. Point to the folder containing training noise files
+  training_noise_dir: /path/to/training/noise
 
 inference:
   device: auto
-
-  # Model/window settings. Usually leave unchanged if using the provided model.
-  segment_length: 4096
+  batch_size: 32
   stride: 4096
-  offsets: [0, 1023, 2047, 3070]
+  offsets: [0, 1024, 2048, 3072]
 
-  # Edge samples trimmed after whitening raw files to reduce whitening artifacts.
-  # For pre-whitened files, this trim is not applied.
-  edge_buffer: 2048
+triggers:
 
-  batch_size: 64
+  thresholds: [0.999, 0.9995, 0.9999, 0.99999]
 
-  # Multiple thresholds and widths can be evaluated in one run.
-  thresholds: [0.9, 0.98, 0.998]
-  min_width_samples: [512, 1024, 2048]
-
-  # Peak-finding helper.
-  # The actual mean cut is:
-  #   max(0, min(mean_cap, threshold - mean_margin))
-  mean_margin: 0.05
-  mean_cap: 0.95
-
-  # Merge triggers from different offsets if they are closer than this.
   merge_tolerance_s: 0.25
 
-noise_similarity:
-  # Optional. If blank/missing, inference still runs and the summary notes that
-  # training noise files were not provided.
-  training_noise_path:
+  smoothed_max:
+    enabled: true
+    smooth_samples: 64
 
-  # Number of nearest training files used to summarize ASD drift.
-  k_nearest: 3
+  peak_width:
+    enabled: true
+    widths: [512, 992]
 
-  # Smoothing window for log-ASD curves, in frequency bins.
-  # Use an odd integer. Set to 1 for no smoothing.
+  full_peak:
+    enabled: true
+    widths: [512, 992]
+    mean_margin: 0.05
+    mean_cap: 0.95
+
+classification:
+  event_tolerance_s: 0.5
+
+asd_mismatch:
+  enabled: true
+  k_nearest: 1
+  welch_seconds: 8.0
+  welch_overlap: 0.5
   smooth_bins: 9
 
-  # Prepared-strain tail diagnostic.
-  tail_window_s: 1.0
-  tail_threshold: 5.0
-
-  # Optional diagnostic only; not part of the main ASD drift score.
-  include_wasserstein: true
-  
 sanity_checks:
-  # If strict is false, mismatches print clear warnings and continue.
-  # If strict is true, mismatches raise an error.
-  strict: false
+  # Raw/unwhitened strain is always required. 
+  strict: true
   check_sample_rate: true
-  check_whitened_state: true
   check_bandpass: true
