@@ -14,7 +14,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from torch.optim.lr_scheduler import ReduceLROnPlateau#, LambdaLR
-from pytorch_lightning import LightningModule, Trainer
+from pytorch_lightning import LightningModule, Trainer, seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint,TQDMProgressBar#, Callback
 
 import importlib
@@ -152,6 +152,8 @@ def load_train_config(config_path):
     training = cfg["training"]
 
     defaults = {
+        "random_seed": int(shared.get("random_seed", 67)),
+        
         # paths
         "data_dir": paths["data_dir"],
         "noise_dir": paths["noise_dir"],
@@ -372,6 +374,8 @@ def main():
     pre_args, remaining_argv = pre_parser.parse_known_args()
     parser = argparse.ArgumentParser(description="gw detection", parents=[pre_parser])
     
+    parser.add_argument("--random_seed", type=int, default=42, help="Random seed.")
+    
     # Paths (must be set by user, no defaults)
     parser.add_argument('--data_dir', default=None, help='Directory containing the injection HDF5 files')
     parser.add_argument('--noise_dir', default=None, help='Directory containing the noise HDF5 files')
@@ -418,6 +422,9 @@ def main():
     
     args = parser.parse_args(remaining_argv)
     args.config = pre_args.config
+    
+    seed_everything(args.random_seed, workers=True)
+    print(f"Random seed: {args.random_seed}", flush=True)
     
     missing = [name for name in ["data_dir", "noise_dir", "checkpoint_dir"] if getattr(args, name) is None]
     if missing:

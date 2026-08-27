@@ -32,24 +32,16 @@ def parse_args(defaults=None, argv=None):
         defaults = {}
 
     # Shared/common overrides.
-    parser.add_argument("--sample_rate", type=int, default=4096,
-                        help="Sampling rate (Hz).")
-    parser.add_argument("--window_len_s", type=float, default=None,
-                        help="Training window length and maximum test file length.")
-    parser.add_argument("--min_window_len_s", type=float, default=None,
-                        help="Minimum test file length.")
-    parser.add_argument("--band_low", type=float, default=25.0,
-                        help="Low-frequency cutoff used for QC and plots.")
-    parser.add_argument("--band_high", type=float, default=450.0,
-                        help="High-frequency cutoff used for QC and plots.")
-    parser.add_argument("--bandpass_order", type=int, default=4,
-                        help="Butterworth bandpass order.")
-    parser.add_argument("--psd_seglen_s", type=float, default=4.0,
-                        help="Welch PSD segment length in seconds.")
-    parser.add_argument("--target_plot_fs", type=float, default=1024.0,
-                        help="Target sample rate for time-series plots.")
-    parser.add_argument("--noise_dir", type=str, default=None,
-                        help="Root output directory; train/ and test/ are created below it.")
+    parser.add_argument("--random_seed",type=int,default=67,help="Random seed used when shuffling download candidates.")
+    parser.add_argument("--sample_rate", type=int, default=4096,help="Sampling rate (Hz).")
+    parser.add_argument("--window_len_s", type=float, default=None,help="Training window length and maximum test file length.")
+    parser.add_argument("--min_window_len_s", type=float, default=None,help="Minimum test file length.")
+    parser.add_argument("--band_low", type=float, default=25.0,help="Low-frequency cutoff used for QC and plots.")
+    parser.add_argument("--band_high", type=float, default=450.0,help="High-frequency cutoff used for QC and plots.")
+    parser.add_argument("--bandpass_order", type=int, default=4,help="Butterworth bandpass order.")
+    parser.add_argument("--psd_seglen_s", type=float, default=4.0,help="Welch PSD segment length in seconds.")
+    parser.add_argument("--target_plot_fs", type=float, default=1024.0, help="Target sample rate for time-series plots.")
+    parser.add_argument("--noise_dir", type=str, default=None, help="Root output directory; train/ and test/ are created below it.")
 
     # Job/range overrides.
     _add_bool_override(parser, "train_noise", "train_noise_enabled",
@@ -196,6 +188,7 @@ def load_download_config(config_path):
         "noise_dir": paths["noise_dir"],
 
         # Shared preprocessing.
+        "random_seed": int(shared.get("random_seed", 67)),
         "sample_rate": int(shared["sample_rate"]),
         "band_low": float(shared["band_low"]),
         "band_high": float(shared["band_high"]),
@@ -1399,7 +1392,7 @@ def run_train_noise(args, ifos, output_dir):
     )
     print(f"Found {len(candidates)} full training-noise candidates before shuffling", flush=True)
 
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(args.random_seed)
     rng.shuffle(candidates)
     target = args.train_n_segments if args.train_n_segments is not None else len(candidates)
     saved = []
@@ -1494,7 +1487,7 @@ def run_test_download(args, ifos, test_root, noise_output_dir, signal_output_dir
             "finite-data splitting and shuffling",
             flush=True,
         )
-        rng = np.random.default_rng()
+        rng = np.random.default_rng(args.random_seed + 1)
         rng.shuffle(base_chunks)
         target = args.test_noise_n_segments
 

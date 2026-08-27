@@ -14,6 +14,7 @@ These settings should stay consistent between downloaded noise and training.
 
 ```yaml
 shared:
+  random_seed: 67
   sample_rate: 4096
   noise_is_whitened: false
   band_low: 25.0
@@ -22,6 +23,8 @@ shared:
   psd_floor: 1.0e-48
   psd_outband: 1.0e40
 ```
+
+`random_seed` controls reproducibility in both the downloader and training pipeline. In the downloader, it determines which files are selected when only a subset of the available time span is requested. During training, it controls model initialization, dataset sampling, and DataLoader worker randomness.
 
 `sample_rate` should match the injection signal data.
 

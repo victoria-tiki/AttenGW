@@ -2,6 +2,7 @@
 # This file is used by both submit_download.slurm and submit.slurm.
 
 shared:
+  random_seed: 67
   sample_rate: 4096
   noise_is_whitened: false
 
