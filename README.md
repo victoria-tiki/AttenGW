@@ -155,41 +155,40 @@ See [`docs/config.md`](docs/config.md) for an overview of training parameters to
 ---
 
 ## 6. Inference
-
-After training, use the inference script to run a trained checkpoint on a downloader-produced HDF5 file and report human-readable trigger times.
+After training, use the inference script to run a trained checkpoint on downloader-produced HDF5 files and report human-readable trigger times.
 
 First edit:
 
 ```bash
 configs/inference_example.yaml
 ```
+
 At minimum, set:
-```
-checkpoint:
-  run_dir: /path/to/checkpoints/latest_run_id
-  ckpt_path:
 
-input:
-  file: /path/to/noise_or_signal_file.hdf5
-
-output:
+```yaml
+paths:
+  input_dir: /path/to/noise_or_signal_files
   output_dir: /path/to/inference_outputs
-
+  checkpoint_dir: /path/to/checkpoints/latest_run_id
+  checkpoint:
+  training_noise_dir: /path/to/training/noise
 ```
-`checkpoint.run_dir` should point to a training run folder containing `config.yaml` (will be saved automatically by the train script) and one or more model `.ckpt` files. If `checkpoint.ckpt_path` is left blank, the inference script will use the newest checkpoint in the run folder.
+
+Set exactly one of `checkpoint_dir` or `checkpoint`. `checkpoint_dir` should point to a training-run folder containing the automatically saved `config.yaml` and one or more `.ckpt` files. If it is used, the checkpoint with the lowest validation loss is selected automatically.
 
 Run locally with:
 
-```
+```bash
 python inference/infer.py --config configs/inference_example.yaml
 ```
-SLURM usage (edit `submit_infer.slurm` to adapt it to your cluster's specification):
 
-```
+For SLURM usage, edit the header of `scripts/submit_infer.slurm` for your cluster and run:
+
+```bash
 sbatch scripts/submit_infer.slurm
 ```
 
-The script saves trigger summaries and optional diagnostic plots to the configured output directory. See [`docs/inference.md`](docs/inference.md) for notes on interpreting model scores and peak-finding settings.
+The script saves one human-readable trigger report per requested trigger method and operating point. See [`docs/inference.md`](docs/inference.md) for details on the configuration, ASD mismatch, trigger construction, and outputs.
 
 ---
 
