@@ -26,7 +26,7 @@ For signal-plus-noise examples, it:
 
 1. loads one synthetic H1/L1 waveform pair from `training.train_file` or `training.val_file`,
 2. finds the merger time from the waveform peak,
-3. selects one of the downloaded real-noise HDF5 files, reserving a small fixed portion of each eligible noise file for validation and using the remainder for training,
+3. selects one of the downloaded real-noise HDF5 files,
 4. builds band-limited PSD interpolants from that selected noise file,
 5. estimates the waveform's matched-filter-style network SNR,
 6. rescales the waveform into the selected training SNR range,
