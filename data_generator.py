@@ -67,21 +67,21 @@ class whiten:
 
         return mixed_L, mixed_H
 
-#original 4096 file segment, with possibility of being moved outside the window
 
+    # flexible psd reader; meant to work with some legacy downloaders that save the strain psd in different formats
     @staticmethod
     def load_interp_psd(path):
         psd_obj = pickle.load(open(path, "rb"), encoding="bytes")
     
-        # Case 1: already an interp1d
+        # case 1: saved as an interp1d
         if isinstance(psd_obj, scipy.interpolate.interp1d):
             return psd_obj
     
-        # Case 2: legacy list wrapper [interp1d]
+        # case 2: saved as legacy list wrapper [interp1d]
         if isinstance(psd_obj, list) and len(psd_obj) > 0 and isinstance(psd_obj[0], scipy.interpolate.interp1d):
             return psd_obj[0]
     
-        # Case 3: (freqs, psd_vals) or [freqs, psd_vals]
+        # Case 3:  saved as legacy (freqs, psd_vals) or [freqs, psd_vals]
         if isinstance(psd_obj, (tuple, list)) and len(psd_obj) == 2:
             freqs, vals = psd_obj
             freqs = np.asarray(freqs)
@@ -90,7 +90,7 @@ class whiten:
                 freqs, vals, bounds_error=False, fill_value=(vals[0], vals[-1])
             )
     
-        # Case 4: dict-like {"freqs":..., "psd":...} 
+        # Case 4: saved as dict {"freqs":..., "psd":...} 
         if isinstance(psd_obj, dict):
             key_map = {k.decode() if isinstance(k, (bytes, bytearray)) else k: k for k in psd_obj.keys()}
             def get_any(names):
@@ -137,9 +137,8 @@ class whiten:
             rho2 = 0.0
         return np.sqrt(rho2)
 
-        
+#Legacy SNR/noise-std schedule used only when noise_is_whitened=True.
 def low_max_snr(epoch):
-    """Legacy SNR/noise-std schedule used only when noise_is_whitened=True."""
     ranges = [
         [0.0, 0.3],
         [0.0, 0.6],
@@ -411,38 +410,9 @@ class GWDataset(Dataset):
 
         return psd_fun
         
-        
-    def _window_ok_for_injection(self, segL, segH, k_sigma=5.0):
-        """
-        Quick local QC for a 1-second window used as a *positive* example.
-
-        Returns True if both detectors look 'reasonable':
-          - finite std
-          - max|x| not larger than k_sigma * std
-
-        We don't mind glitches in noise-only segments, but we want to avoid
-        huge spikes in the same 1 s window that contains the merger (so the model doesn't learn glitch=merger).
-        """
-        for seg in (segL, segH):
-            seg = np.asarray(seg)
-            std = np.std(seg)
-            if not np.isfinite(std) or std <= 0:
-                return False
-
-            max_abs = np.max(np.abs(seg))
-            if max_abs > k_sigma * std:
-                return False
-
-        return True
-
-
-            
+    # returns psd for a given noise file index
     def _get_psd_interps_from_noisefile(self, idx_noise):
-        """
-        Return (psd_L1_interp, psd_H1_interp) for a given noise file index.
 
-        Expects datasets 'psd_L1', 'psd_H1' and 'freqs' in the noise HDF5 file.
-        """
         keyL = f"L1_{idx_noise}"
         keyH = f"H1_{idx_noise}"
 
@@ -453,19 +423,13 @@ class GWDataset(Dataset):
         nf = self.noise_handlers[idx_noise]
 
         if ("psd_L1" not in nf) or ("psd_H1" not in nf):
-            raise KeyError(
-                f"Noise file {self.noise_files[idx_noise]} is missing "
-                "'psd_L1' or 'psd_H1' datasets."
-            )
+            raise KeyError(f"Noise file {self.noise_files[idx_noise]} is missing 'psd_L1' or 'psd_H1' datasets.")
 
         psd_L_arr = np.asarray(nf["psd_L1"][()])
         psd_H_arr = np.asarray(nf["psd_H1"][()])
 
         if "freqs" not in nf:
-            raise KeyError(
-                f"Noise file {self.noise_files[idx_noise]} has PSDs but no 'freqs' dataset; "
-                "cannot build frequency-interpolated PSD."
-            )
+            raise KeyError(f"Noise file {self.noise_files[idx_noise]} has PSDs but no 'freqs' dataset; cannot build frequency-interpolated PSD.")
 
         freqs = np.asarray(nf["freqs"][()])
 
@@ -671,7 +635,7 @@ class GWDataset(Dataset):
         """
         Generate a single training sample (signal+noise or noise-only).
     
-        Requires *raw, unwhitened* LIGO noise chunks — whitening happens inside this method.
+        Requires *raw, unwhitened* LIGO noise chunks. whitening happens inside this method.
     
         For signal+noise samples:
         - Selects sample from waveform files and finds merger point.
@@ -762,51 +726,6 @@ class GWDataset(Dataset):
         window_start = max(0, min(window_start, total_len - self.segment_length))
         window_end = int(window_start + self.segment_length)
         
-    
-        '''# ── inject signal ────────────────────────────
-        if inject_signal:
-            
-            if plot_samples:
-                snr_L = whiten.matched_filter_snr(raw_L1, psd_L1, self.dt,self.psd_floor)
-                snr_H = whiten.matched_filter_snr(raw_H1, psd_H1, self.dt,self.psd_floor)
-                snr = np.sqrt(snr_L**2 + snr_H**2)
-
-
-            self.p_higher = max(self.p_higher_fin, self.p_higher_init * np.exp(-self.epoch / self.tau))
-            #if self.train==1:
-            #    print('p_higher: '+str(self.p_higher)+' epoch:'+str(self.epoch))
-            if np.random.rand() < self.p_higher:
-                snr_L = whiten.matched_filter_snr(raw_L1, psd_L1, self.dt,self.psd_floor)
-                snr_H = whiten.matched_filter_snr(raw_H1, psd_H1, self.dt,self.psd_floor)
-                snr = np.sqrt(snr_L**2 + snr_H**2)
-
-                #target_snr = np.random.uniform(15, 30) #boost snr range 15-30
-                
-                # Example SNR sampling weights
-                r = np.random.rand()
-                if r < 0.5:
-                    # 50% of injections: just above threshold (weak / marginal)
-                    target_snr = np.random.uniform(8, 15)
-                elif r < 0.8:
-                    # 30%: medium-loud
-                    target_snr = np.random.uniform(15, 25)
-                else:
-                    # 20%: loud tail
-                    target_snr = np.random.uniform(25, 45)
-
-
-
-                scale = target_snr / (snr + 1e-6)
-                raw_L1 *= scale
-                raw_H1 *= scale
-                snr = target_snr
-                
-            min_inject = buffer
-            max_inject = total_len - signal_len - buffer
-            inject_idx = np.random.randint(min_inject, max_inject)
-            inj_end    = inject_idx + signal_len
-            nL[inject_idx:inj_end] += raw_L1
-            nH[inject_idx:inj_end] += raw_H1'''
             
         # ── inject signal ────────────────────────────
         if inject_signal:
@@ -826,8 +745,8 @@ class GWDataset(Dataset):
                 self.p_higher = self.p_higher_init
 
             # choose target SNR *inside* boosted regime:
-            #   - with prob p_higher → "easy" high-SNR bin
-            #   - otherwise         → "harder" lower-SNR bin
+            #   - with prob p_higher, select "easy" high-SNR bin
+            #   - with prob (1-p_higher), select "hard" low-SNR bin
             u = np.random.rand()
             if u < self.p_higher:
                 # easy / loud bin
@@ -844,7 +763,7 @@ class GWDataset(Dataset):
 
             # inject scaled signal into noise
             # Inject the waveform so that the merger lands in the second half
-            # of the fixed, window-centered 1 s model crop.
+            # of the fixed, window-centered model crop.
             #
             # With the _whitening_layout minimum above, this range should always
             # be non-empty for the intended waveform/context geometry.
@@ -866,62 +785,12 @@ class GWDataset(Dataset):
         segL = np.asarray(wL_full[window_start:window_end], dtype=np.float64)
         segH = np.asarray(wH_full[window_start:window_end], dtype=np.float64)        
 
-        # remove tiny DC offsets per window
+        # remove tiny offsets per window
         meansegL=np.mean(segL)
         meansegH=np.mean(segH)
         segL = segL - meansegL
         segH = segH - meansegH
         
-        
-        '''# --- local QC: avoid big glitches *inside the label region* for positives ---
-        if inject_signal:
-            rel_merger = bp_merger_idx - w0
-            label_start = max(0, rel_merger - self.label_width)
-            label_end   = max(0, min(self.segment_length, rel_merger))
-
-            if label_end > label_start:  # sanity check
-                roiL = segL[label_start:label_end]
-                roiH = segH[label_start:label_end]
-
-                # strict check first (e.g. k_sigma = 4)
-                if not self._window_ok_for_injection(roiL, roiH, k_sigma=4.0):
-                    if remaining_retries > 0:
-                        # retry as a *signal* sample, but with one fewer retry
-                        return self.__data_generation(
-                            file_idx,
-                            sample_idx,
-                            plot_samples=plot_samples,
-                            force_inject=True,
-                            remaining_retries=remaining_retries - 1,
-                        )
-                    else:
-                        # retries exhausted → try one last time with looser criterion
-                        if not self._window_ok_for_injection(roiL, roiH, k_sigma=6.0):
-                            # still too glitchy even with k_sigma=6 → fall back to noise-only
-                            return self.__data_generation(
-                                file_idx,
-                                sample_idx,
-                                plot_samples=plot_samples,
-                                force_inject=False,   # noise-only
-                                remaining_retries=0,  # and *no* further recursion
-                            )
-            
-        # --- optional QC for noise-only windows: drop truly extreme glitches ---
-        if not inject_signal:
-            # check the whole window (or central part if you prefer)
-            if not self._window_ok_for_injection(segL, segH, k_sigma=8.0):
-                if remaining_retries > 0:
-                    # resample a fresh noise-only window, fewer retries left
-                    return self.__data_generation(
-                        file_idx,
-                        sample_idx,
-                        plot_samples=plot_samples,
-                        force_inject=False,
-                        remaining_retries=remaining_retries - 1,
-                    )
-                # remaining_retries == 0 → accept even if it's ugly'''
-
-
         #normalizaion
         normalization_scale = 1.0
         
