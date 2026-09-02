@@ -11,13 +11,14 @@ import os
 import matplotlib.pyplot as plt
 from astropy.time import Time
 import matplotlib.dates as mdates
-from scipy.signal import welch
 from scipy.signal import welch, butter, filtfilt
 from scipy.ndimage import binary_dilation
 
-
+# ----------- parse arguments helpers ---------------
 
 def _add_bool_override(parser, name, dest, help_text):
+    """If the YAML defines a boolean value, the CLI overwriting it can cause bugs. This helper restores desired behaviour for CLI overwrites
+    """
     group = parser.add_mutually_exclusive_group()
     group.add_argument(f"--{name}", dest=dest, action="store_true", default=None,
                        help=help_text)
@@ -26,6 +27,8 @@ def _add_bool_override(parser, name, dest, help_text):
 
 
 def parse_args(defaults=None, argv=None):
+    """Build the command-line interface (apply YAML values from load_download_config as defaults). 
+    """
     parser = argparse.ArgumentParser(description="Download segments for GW ML dataset")
 
     if defaults is None:
@@ -74,7 +77,6 @@ def parse_args(defaults=None, argv=None):
     parser.add_argument("--max_raw_std", type=float, default=None)
     parser.add_argument("--min_raw_std", type=float, default=None)
 
-    # Internal default remains H1_DATA/L1_DATA; it need not be in YAML.
     parser.add_argument("--dq_flags", nargs="+", default=["{ifo}_DATA"])
 
     _add_bool_override(parser, "plot_timeline", "plot_timeline",
@@ -89,6 +91,9 @@ def parse_args(defaults=None, argv=None):
 
 
 def _optional_int(value, field_name):
+    """Interpret a blank YAML field as None (not 0). eg if n_segments is blank, it should mean None (process all) not 0 (process none). 
+    """
+    
     if value is None or value == "":
         return None
     try:
@@ -98,6 +103,8 @@ def _optional_int(value, field_name):
 
 
 def _required_mapping(parent, key):
+    """Require a YAML section to have the expected key: value structure
+    """
     value = parent.get(key)
     if not isinstance(value, dict):
         raise ValueError(f"Config entry '{key}' must be a mapping.")
@@ -105,7 +112,8 @@ def _required_mapping(parent, key):
 
 
 def load_download_config(config_path):
-    """Load and validate the restructured downloader configuration."""
+    """Read the YAML file, check it, and turn it into parser defaults.
+    """
     with open(config_path, "r") as f:
         cfg = yaml.safe_load(f)
 
@@ -125,7 +133,6 @@ def load_download_config(config_path):
         "gps_start", "gps_end", "n_segments", "mode", "require_full_window",
         "rms_glitch_scope", "allow_signal_window_shrink",
         "min_signal_window_len_s",
-        # These now belong under download.train_noise.
         "event_pad_s", "glitch_sigma", "glitch_max_frac",
         "max_std_ratio", "amp_thresh", "rms_thresh",
         "max_raw_std", "min_raw_std",
@@ -184,7 +191,6 @@ def load_download_config(config_path):
             )
 
     defaults = {
-        # Automatic output layout below this existing path setting.
         "noise_dir": paths["noise_dir"],
 
         # Shared preprocessing.
@@ -228,7 +234,46 @@ def load_download_config(config_path):
 
     return defaults
 
+def validate_runtime_args(args):
+    """ Some more sanity checks for the final configuration after YAML and CLI arguments are parsed"""
+    if args.noise_dir is None:
+        raise ValueError("paths.noise_dir (or --noise_dir) is required.")
+    if args.window_len_s is None or args.min_window_len_s is None:
+        raise ValueError("window_len_s and min_window_len_s are required.")
+    if args.min_window_len_s <= 0 or args.window_len_s <= 0:
+        raise ValueError("window lengths must be positive.")
+    if args.min_window_len_s > args.window_len_s:
+        raise ValueError("min_window_len_s cannot exceed window_len_s.")
+    args.test_enabled = bool(args.test_noise_enabled or args.test_signal_enabled)
+    if not args.train_noise_enabled and not args.test_enabled:
+        raise ValueError(
+            "At least one of train_noise, test.noise, or test.signal must be enabled."
+        )
+    if args.train_noise_enabled:
+        if args.train_gps_start is None or args.train_gps_end is None:
+            raise ValueError("Enabled train_noise requires train_gps_start/train_gps_end.")
+        if int(args.train_gps_start) >= int(args.train_gps_end):
+            raise ValueError("train_gps_start must be earlier than train_gps_end.")
+    if args.test_enabled:
+        if args.test_gps_start is None or args.test_gps_end is None:
+            raise ValueError("Enabled test noise/signal requires test_gps_start/test_gps_end.")
+        if int(args.test_gps_start) >= int(args.test_gps_end):
+            raise ValueError("test_gps_start must be earlier than test_gps_end.")
+    if args.train_noise_enabled and args.test_enabled:
+        if int(args.test_gps_start) < int(args.train_gps_end):
+            raise ValueError(
+                "Test data must begin at or after the end of training data "
+                "to avoid train/test leakage."
+            )
+
+
+#----- Window construction and data cleaning helpers ----------------------
+
+
+
 def get_known_event_windows(gps_start, gps_end, pad_s):
+    """Return time ranges around known GW events (to identify signals and to remove them from the pure noise segments
+    """
     ev_list = query_events(select=[f"gps-time >= {gps_start}", f"gps-time <= {gps_end}"])
     windows = []
     for ev in ev_list:
@@ -237,13 +282,11 @@ def get_known_event_windows(gps_start, gps_end, pad_s):
     return windows
 
 
-def interval_overlaps_windows(start, end, windows):
-    for w0, w1 in windows:
-        if start < w1 and end > w0:
-            return True
-    return False
 
 def get_unique_events_in_range(gps_start, gps_end, dedup_tol_s=1.0):
+    """Group GWOSC names that refer to the same physical event (some may be duplicated in their catalogue under an alias)
+    """
+    
     ev_list = query_events(select=[
         f"gps-time >= {gps_start}",
         f"gps-time <= {gps_end}",
@@ -298,7 +341,7 @@ def plot_psd_examples(windows, output_dir, whiten, max_plots=5, mode="noise"):
         fname = f"{mode}_{whiten_label}_{int(s)}_{int(e)}.hdf5"
         path = os.path.join(output_dir, fname)
         if not os.path.exists(path):
-            # fallback to old name if needed
+            # Older runs used a filename without the raw/white tag; support those plots too.
             fname_alt = f"{mode}_{int(s)}_{int(e)}.hdf5"
             path = os.path.join(output_dir, fname_alt)
             if not os.path.exists(path):
@@ -326,19 +369,11 @@ def plot_psd_examples(windows, output_dir, whiten, max_plots=5, mode="noise"):
         print(f"Saved PSD plot to {out_png}")
 
 
-
 def bandpass_for_qc(vals, fs, low=25.0, high=450.0, order=4):
     """
-    Make a bandpassed copy of 'vals' for quality-control metrics.
+    Make a bandpassed copy of the strain for quality-control metrics so that all vetos are applied in the astrophysical band of interest.
 
-    This does NOT replace the full-band data used for PSD/whitening;
-    it is only used for:
-      - amp_thresh
-      - rms_thresh
-      - max_raw_std / min_raw_std
-      - max_std_ratio
-
-    so that all vetos are applied in the astrophysical band of interest.
+    The model/data generator operates only on a chosen frequency band. Raw LIGO strain can contain large low- or high-frequency behavior that is irrelevant to that band. We do not want such out-of-band power to trigger an amplitude/RMS veto.
     """
     nyq = 0.5 * fs
     b, a = butter(order, [low / nyq, high / nyq], btype="band")
@@ -347,10 +382,8 @@ def bandpass_for_qc(vals, fs, low=25.0, high=450.0, order=4):
 
 def get_good_data_intervals(detector, gps_start, gps_end, flag_templates):
     """
-    Intersect multiple GWOSC timeline flags for a given IFO.
-
-    flag_templates is a list of strings with a '{ifo}' placeholder, e.g.:
-      ['{ifo}_DATA', '{ifo}_CBC_CAT2']
+    Find times when this detector was available and passed all requested
+    data-quality flags, so we only build examples from valid detector data.
     """
     all_intervals = None
     for tmpl in flag_templates:
@@ -369,6 +402,7 @@ def get_good_data_intervals(detector, gps_start, gps_end, flag_templates):
 
 
 def intersect_intervals(list1, list2):
+    "input from the get_good_data_intervals helper. finds intervals when both detectors were online and supplying valid data"
     out = []
     i, j = 0, 0
     list1 = sorted(list1)
@@ -388,8 +422,19 @@ def intersect_intervals(list1, list2):
 
 def clamp_glitches_bp(vals, fs, sigma=3.5, max_frac=0.002,
                       low=25.0, high=450.0, order=4):
+    """Find very short, very loud in-band spikes and optionally interpolate them.
+    
+    Why this exists for training:
+        A tiny number of enormous samples can dominate a noise window and distort its
+        PSD/whitening. If the problem is only a few samples, throwing away the whole
+        window is unnecessary, so we interpolate across those samples.
+    
+    Why there is a maximum bad fraction:
+        Interpolation is reasonable for a tiny spike, not for a large corrupted
+        fraction of the window (it can substantially alter the PSD). If too much is flagged, the caller treats the whole
+        window as bad instead of inventing a large amount of replacement data.
+    """
     vals_bp = bandpass_for_qc(vals, fs, low=low, high=high, order=order)
-
     x = vals_bp - np.median(vals_bp)
     mad = np.median(np.abs(x))
     if mad == 0.0 or not np.isfinite(mad):
@@ -411,7 +456,7 @@ def clamp_glitches_bp(vals, fs, sigma=3.5, max_frac=0.002,
         return vals, 0.0, False
 
     if frac_bad > max_frac:
-        # too much of the window is crazy → veto
+        # too much of the window is crazy -> veto
         return vals, frac_bad, True
 
     good_idx = np.where(~mask)[0]
@@ -426,9 +471,8 @@ def clamp_glitches_bp(vals, fs, sigma=3.5, max_frac=0.002,
 
 def pick_windows_from_intervals(intervals, window_len, require_full=False):
     """
-    Break each interval into non-overlapping windows.
-    If require_full=True: only keep exact-length windows.
-    If require_full=False: keep last partial window too.
+    Cut all valid time intervals into non-overlapping windows of length window_len_s.
+    Input is the output from intersect_intervals
     """
     windows = []
     for s, e in intervals:
@@ -448,7 +492,7 @@ def pick_windows_from_intervals(intervals, window_len, require_full=False):
 
 def estimate_psd(strain, fs, seglen_s=4.0, average="median"):
     """
-    Estimate a one-sided PSD using Welch's method.
+    Estimate PSD using Welch's method.
 
     Parameters
     ----------
@@ -458,6 +502,10 @@ def estimate_psd(strain, fs, seglen_s=4.0, average="median"):
         Sampling frequency [Hz].
     seglen_s : float
         Length of each Welch segment in seconds.
+    average : {"mean", "median"}
+        How to combine the PSD estimates from the individual Welch segments.
+        "mean" averages all segments normally; "median" is less affected by
+        unusually loud segments or glitches.
 
     Returns
     -------
@@ -465,8 +513,12 @@ def estimate_psd(strain, fs, seglen_s=4.0, average="median"):
         Frequency grid [Hz].
     Pxx : 1D np.ndarray
         Power spectral density [strain^2 / Hz].
+        
+        Why Welch averaging:
+        One FFT of a long noisy window is a noisy PSD estimate. Welch splits the data
+        into overlapping pieces and averages them to obtain a more stable estimate.
     """
-    #  avoid DC leaks
+    # Remove the mean so a constant offset does not create an artificial spike at 0 Hz.
     strain = strain - np.mean(strain)
 
     nperseg = int(seglen_s * fs)
@@ -489,12 +541,16 @@ def estimate_psd(strain, fs, seglen_s=4.0, average="median"):
 def whiten_with_psd(strain, psd_freqs, psd_vals, fs):
     """
     Whiten 'strain' using a precomputed PSD (freqs + psd_vals).
+    
+    Why interpolate the PSD first:
+        Welch's PSD frequencies and the FFT frequencies of the full window are not
+        generally identical, so the PSD has to be evaluated on the FFT grid.
     """
     dt = 1.0 / fs
     Nt = len(strain)
     freqs_target = np.fft.rfftfreq(Nt, dt)
 
-    # Interpolate PSD onto the FFT frequencies
+    # Interpolate PSD onto the FFT frequencies. Whitening divides FFT bins by the PSD, so both arrays must use the same frequency points.
     psd_interp = np.interp(freqs_target, psd_freqs, psd_vals)
     psd_interp = np.maximum(psd_interp, 1e-40)  
 
@@ -505,60 +561,16 @@ def whiten_with_psd(strain, psd_freqs, psd_vals, fs):
     return white_ht
 
 
-def clamp_glitches(vals, sigma=8.0, max_frac=0.01):
-    """
-    Robustly clamp short, loud glitches *before* PSD estimation.
-
-    - Estimate robust std via MAD.
-    - Mark samples with |x - median(x)| > sigma * robust_std as glitches.
-    - If too many samples are bad (fraction > max_frac), mark window as bad.
-    - Otherwise, replace glitch samples by linear interpolation in time.
-
-    Returns
-    -------
-    vals_clipped : np.ndarray
-        Possibly modified strain.
-    frac_bad : float
-        Fraction of samples identified as glitches.
-    too_many : bool
-        True if frac_bad > max_frac (caller should skip this window).
-    """
-    x = vals - np.median(vals)
-    mad = np.median(np.abs(x))
-
-    if mad == 0.0 or not np.isfinite(mad):
-        return vals, 0.0, False
-
-    robust_std = 1.4826 * mad  
-    thresh = sigma * robust_std
-
-    mask = np.abs(x) > thresh
-    n_bad = mask.sum()
-    frac_bad = n_bad / len(vals)
-
-    if n_bad == 0:
-        return vals, 0.0, False
-
-    # If a huge fraction of the window, reject it
-    if frac_bad > max_frac:
-        return vals, frac_bad, True
-
-    # Otherwise interpolate across the spikes
-    good_idx = np.where(~mask)[0]
-    bad_idx = np.where(mask)[0]
-
-    # edge case
-    if len(good_idx) < 2:
-        return vals, frac_bad, True
-
-    vals_clipped = vals.copy()
-    vals_clipped[mask] = np.interp(bad_idx, good_idx, vals[good_idx])
-
-    return vals_clipped, frac_bad, False
-
+# ---------- download and save windows ---------------------
 
 def fetch_raw_window(ifo_list, start, end, sample_rate):
-    """Fetch raw strain for all IFOs without applying QC or saving."""
+    """
+    Download the coincident H1/L1 strain for a selected time window.
+    
+    This helper treats the fetch as an all-or-nothing operation: if either detector fails, the pair is not used. It also checks that the arrays have the same number of samples.
+
+    The earlier interval functions only tell us which times should contain valid data. We still need to fetch the strain itself, and make sure both detectors were downloaded successfully with matching lengths.
+    """
     fetched = {}
     errors = []
     fetch_start = int(start)
@@ -587,46 +599,39 @@ def fetch_raw_window(ifo_list, start, end, sample_rate):
 
 
 def _safe_float_attr(value):
+    """Convert numeric settings to something HDF5 can store. none to np.nan and everyting else to float"""
     return np.nan if value is None else float(value)
 
 
 def download_and_save_window(
-    ifo_list,
-    start,
-    end,
-    sample_rate,
-    mode,
-    output_dir,
-    amp_thresh=None,
-    rms_thresh=None,
-    whiten=False,
-    glitch_sigma=None,
-    glitch_max_frac=0.01,
-    max_raw_std=None,
-    min_raw_std=None,
-    max_std_ratio=None,
-    band_low=25.0,
-    band_high=450.0,
-    bandpass_order=4,
-    psd_seglen_s=4.0,
-    event_gps=None,
-    event_names=None,
-    requested_window_len_s=None,
-    saved_window_len_s=None,
-    qc_policy="enforce",
-    dataset_split="train",
-    preloaded_data=None,
-):
+    ifo_list, start, end, sample_rate, mode, output_dir, amp_thresh=None, rms_thresh=None, whiten=False, glitch_sigma=None, glitch_max_frac=0.01, max_raw_std=None, min_raw_std=None, max_std_ratio=None, band_low=25.0, band_high=450.0, bandpass_order=4, psd_seglen_s=4.0, event_gps=None, event_names=None, requested_window_len_s=None, saved_window_len_s=None, qc_policy="enforce", dataset_split="train", preloaded_data=None,):
     """
     Save one H1/L1 window.
+    Also the central train/test policy function
 
-    qc_policy="enforce": preserve the original training-noise behavior:
-      clean acceptable glitches and reject windows that fail QC.
-
-    qc_policy="flag_only": save untouched raw strain, calculate the same QC
-      measurements, and store whether training QC would have rejected it.
-      Only unusable data (fetch failure, non-finite values, or near-zero raw
-      variance) prevents saving.
+    For TRAINING (``qc_policy='enforce'``):
+        - small glitches may be cleaned;
+        - configured QC failures reject the window;
+    
+    Why:
+        Training files are examples the model learns from, so we are allowed to define
+        a cleaner training distribution and avoid teaching the network from obviously
+        corrupted segments.
+    
+    For TESTING (``qc_policy='flag_only'``):
+        - the saved strain stays raw;
+        - the same QC measurements are calculated;
+        - failures are written to metadata for potential later diagnostics instead of deleting the window.
+    
+    Why:
+        Test data should represent the observation the model actually has to handle.
+        If we removed difficult test windows because they fail the training cuts, the
+        measured performance and false-alarm rate would be altered.
+    
+    Only data that cannot be meaningfully used at all (failed fetch, non-finite data,
+    near-zero variance, etc.) are rejected in the test path.
+      
+    fetch_raw_window() gets data; download_and_save_window() processes and saves data.
     """
     if qc_policy not in {"enforce", "flag_only"}:
         raise ValueError(f"Unknown qc_policy={qc_policy!r}")
@@ -686,6 +691,8 @@ def download_and_save_window(
         vals_for_qc = vals_raw
         vals_for_processing = vals_raw
 
+        # Measure glitches the same way in train and test so the metadata are comparable.
+        # Only training is allowed to use the cleaned copy; test strain uses the uncleaed originals.
         if glitch_sigma is not None:
             vals_clipped, frac_bad, too_many = clamp_glitches_bp(
                 vals_raw,
@@ -705,8 +712,6 @@ def download_and_save_window(
                     f"(frac_bad={frac_bad:.3e} > {glitch_max_frac:.3e})"
                 )
             else:
-                # Training uses the cleaned strain. Test remains raw on disk,
-                # but downstream diagnostic QC mirrors the training-cleaned copy.
                 vals_for_qc = vals_clipped
                 if qc_policy == "enforce":
                     vals_for_processing = vals_clipped
@@ -740,8 +745,9 @@ def download_and_save_window(
                 f"{ifo}: qc_rms={qc_rms:.3e} > rms_thresh={rms_thresh:.3e}"
             )
 
-        # Training PSD/whitening uses the cleaned strain, exactly as before.
-        # Test PSD is descriptive and uses the untouched raw strain.
+        # The PSD must describe the data it belongs to. Training may have been cleaned,
+        # so its PSD uses that cleaned strain. Test is an observational record, so its
+        # saved PSD describes the untouched raw test strain.
         psd_source = vals_for_processing if qc_policy == "enforce" else vals_raw
         freqs_psd, pxx = estimate_psd(psd_source, fs=sample_rate, seglen_s=psd_seglen_s,
             average="mean" if qc_policy == "enforce" else "median",
@@ -786,7 +792,8 @@ def download_and_save_window(
                     f"max_std_ratio={max_std_ratio:.2f} "
                     f"(stds={['%.3e' % s for s in stds]})"
                 )
-
+                
+    # Keep the test window, but mark whether the training rules would have rejected it.
     qc_would_reject_train = bool(qc_reasons)
     if qc_policy == "enforce" and qc_would_reject_train:
         print(f"[REJECT] {mode} {start}-{end}: {'; '.join(qc_reasons)}")
@@ -861,7 +868,13 @@ def download_and_save_window(
 
 
 def centered_fallback_lengths(max_window_len_s, min_window_len_s):
-    """Return the existing halving sequence, always including the minimum."""
+    """Return shorter window lengths to try around a known event.
+    
+    Why this exists:
+        We prefer the full requested test window around each event, but sometimes one
+        detector does not have that much valid data on both sides. A shorter centered
+        window is still useful and lets us keep the event in the evaluation. We progressively half the window size until a segment is available
+    """
     max_w = float(max_window_len_s)
     min_w = float(min_window_len_s)
     lengths = []
@@ -875,18 +888,20 @@ def centered_fallback_lengths(max_window_len_s, min_window_len_s):
 
 
 def interval_is_contained(start, end, intervals):
+    """ Check that an entire proposed window lies inside valid coincident time, not just the event gps.
+    """
     return any(start >= s and end <= e for s, e in intervals)
 
 
-def download_test_signal_with_availability_fallback(
-    ifos,
-    event_gps_value,
-    event_names,
-    good_intervals,
-    args,
-    output_dir,
-):
-    """Centered signal fallback based only on availability/finite data."""
+def download_test_signal_with_availability_fallback(ifos, event_gps_value, event_names, good_intervals, args, output_dir,):
+    """Download a known-event test window, shortening it only when data are unavailable.
+    
+    Why this exists:
+        A catalog event should stay in the test set even if the full preferred amount
+        of surrounding H1/L1 data is not available. We therefore try shorter windows,
+        always keeping the event centered.
+    """
+    
     lengths = centered_fallback_lengths(args.window_len_s, args.min_window_len_s)
 
     for window_len_s in lengths:
@@ -906,32 +921,7 @@ def download_test_signal_with_availability_fallback(
             )
             continue
 
-        downloaded = download_and_save_window(
-            ifos,
-            s,
-            e,
-            args.sample_rate,
-            mode="signal",
-            output_dir=output_dir,
-            amp_thresh=args.amp_thresh,
-            rms_thresh=args.rms_thresh,
-            whiten=False,
-            glitch_sigma=args.glitch_sigma,
-            glitch_max_frac=args.glitch_max_frac,
-            max_raw_std=args.max_raw_std,
-            min_raw_std=args.min_raw_std,
-            max_std_ratio=args.max_std_ratio,
-            band_low=args.band_low,
-            band_high=args.band_high,
-            bandpass_order=args.bandpass_order,
-            psd_seglen_s=args.psd_seglen_s,
-            event_gps=event_gps_value,
-            event_names=event_names,
-            requested_window_len_s=args.window_len_s,
-            saved_window_len_s=window_len_s,
-            qc_policy="flag_only",
-            dataset_split="test",
-        )
+        downloaded = download_and_save_window(ifos, s, e, args.sample_rate, mode="signal", output_dir=output_dir, amp_thresh=args.amp_thresh, rms_thresh=args.rms_thresh, whiten=False, glitch_sigma=args.glitch_sigma, glitch_max_frac=args.glitch_max_frac, max_raw_std=args.max_raw_std, min_raw_std=args.min_raw_std, max_std_ratio=args.max_std_ratio, band_low=args.band_low, band_high=args.band_high, bandpass_order=args.bandpass_order, psd_seglen_s=args.psd_seglen_s, event_gps=event_gps_value, event_names=event_names, requested_window_len_s=args.window_len_s, saved_window_len_s=window_len_s, qc_policy="flag_only", dataset_split="test")
 
         if downloaded:
             print(
@@ -958,12 +948,15 @@ def download_test_signal_with_availability_fallback(
 
 
 def chunk_interval_rebalanced(start, end, max_len_s, min_len_s):
-    """
-    Split one valid interval into non-overlapping chunks in [min_len_s, max_len_s].
-
-    Full maximum-length chunks are used where possible. If the final remainder
-    is shorter than the minimum, enough time is moved from the preceding chunk
-    to make the final chunk exactly min_len_s. No usable samples are dropped.
+    """Split valid test time into files without wasting a short remainder.
+    
+    Why this exists:
+        Suppose we have 250 s of valid data, want files no longer than 100 s, and do
+        not allow files shorter than 64 s. A naive split gives 100 + 100 + 50 s. The
+        final 50 s cannot be saved, so we would unnecessarily lose valid livetime.
+    
+    This function instead redistributes the end, for example 100 + 86 + 64 s.
+    
     """
     start = float(start)
     end = float(end)
@@ -995,15 +988,16 @@ def chunk_interval_rebalanced(start, end, max_len_s, min_len_s):
         chunks.append((cursor, end))
         return chunks
 
-    # Short remainder: rebalance only the last full chunk and remainder.
+    # The final piece is too short to save. Borrow just enough time from the previous
+    # full chunk so both final files satisfy the minimum instead of dropping livetime.
     for _ in range(max(0, n_full - 1)):
         chunks.append((cursor, cursor + max_len_s))
         cursor += max_len_s
 
     penultimate_len = max_len_s - (min_len_s - remainder)
     if penultimate_len + eps < min_len_s:
-        # General fallback for unusual max/min choices: distribute the tail
-        # evenly while retaining all samples and respecting the maximum.
+        # With unusual max/min settings, borrowing from one chunk may not be enough.
+        # Split the remaining tail evenly so every file stays within the allowed sizes.
         tail_duration = end - cursor
         n_tail = int(np.ceil(tail_duration / max_len_s))
         equal_len = tail_duration / n_tail
@@ -1022,7 +1016,8 @@ def chunk_interval_rebalanced(start, end, max_len_s, min_len_s):
 
 
 def joint_finite_intervals(preloaded_data, start, sample_rate, min_len_s):
-    """Find maximal contiguous intervals finite in every IFO."""
+    """This function splits the chunk around non-finite (NaN or Inf) samples and keeps the good pieces that are long enough in *both* detectors.
+    """
     arrays = list(preloaded_data.values())
     if not arrays:
         return []
@@ -1049,23 +1044,27 @@ def joint_finite_intervals(preloaded_data, start, sample_rate, min_len_s):
 
 
 def _slice_preloaded(preloaded_data, i0, i1):
+    """Take the same sample slice from every detector.
+    """
     return {ifo: vals[i0:i1] for ifo, vals in preloaded_data.items()}
 
 
-def process_test_noise_chunk(
-    ifos,
-    start,
-    end,
-    args,
-    output_dir,
-    remaining_limit=None,
-):
+def process_test_noise_chunk(ifos, start, end, args, output_dir, remaining_limit=None):
     """
-    Save all usable data inside one proposed test-noise chunk.
-
-    Fetch failures are recursively divided to locate available subintervals.
-    Successful fetches are split at joint non-finite samples, then rebalanced
-    into files bounded by min_window_len_s and window_len_s.
+    Try to save as much usable test-noise time as possible from one proposed chunk.
+    
+    Why this function is more complicated than the training path:
+        For test noise, analyzed livetime matters directly for the false-alarm rate.
+        We therefore try not to discard a large interval just because a small part is
+        unavailable or contains non-finite samples.
+    
+    What it does:
+        1. Try to fetch the whole chunk.
+        2. If that fetch fails, split the time in half and try each half separately.
+           A failed large request does not prove every second inside it is unavailable.
+        3. If the fetch succeeds but contains NaN/Inf samples, split around those.
+        4. Rebalance the remaining good time into legal file lengths.
+        5. Save the pieces with ``flag_only`` QC so difficult real noise is not censored.
     """
     if remaining_limit is not None and remaining_limit <= 0:
         return []
@@ -1161,13 +1160,18 @@ def process_test_noise_chunk(
                 saved.append((chunk_start, actual_end))
 
     return saved
+    
+#----------- timeline plot code (for diagnostics only) --------------------------------
 
 def plot_timeline_all(gps_start, gps_end, noise_intervals, event_times, output_dir):
+    """Plot all usable noise time and known event times over the requested range.
+    """
+    
     def gps_to_mpl(gps):
         t = Time(gps, format='gps').utc
         return mdates.date2num(t.datetime)
 
-    # Merge intervals so each region is drawn once
+    # Adjacent pieces are one contiguous region -> merge them for a cleaner plot.
     merged_noise = merge_intervals(noise_intervals, tol=0.0)
 
     start_num = gps_to_mpl(gps_start)
@@ -1255,7 +1259,7 @@ def merge_intervals(intervals, tol=0.0):
 
 def plot_timeline_saved(gps_start, gps_end, saved_noise_windows, saved_signal_windows, output_dir):
     """
-    Plot ONLY the windows we saved.
+    Like plot_timeline_all, but plot ONLY the windows we saved.
     """
     def gps_to_mpl(gps):
         t = Time(gps, format='gps').utc
@@ -1290,7 +1294,8 @@ def plot_timeline_saved(gps_start, gps_end, saved_noise_windows, saved_signal_wi
 
 
 def plot_saved_timeseries(windows, output_dir, whiten, mode, args):
-    """Original diagnostic time-series plotting, factored for each output dir."""
+    """Plot a few human-readable views of the strain that was saved.
+    The plots are downsampled to reduce drawing time and required disk space"""
     if not windows:
         return
 
@@ -1354,6 +1359,7 @@ def plot_saved_timeseries(windows, output_dir, whiten, mode, args):
 
 
 def get_coincident_noise_intervals(args, gps_start, gps_end, event_pad_s=None):
+    """Find times that are usable in both H1 and L1, and optionally remove known events."""
     int_h1 = get_good_data_intervals("H1", gps_start, gps_end, args.dq_flags)
     int_l1 = get_good_data_intervals("L1", gps_start, gps_end, args.dq_flags)
     good_int = intersect_intervals(int_h1, int_l1)
@@ -1376,6 +1382,7 @@ def get_coincident_noise_intervals(args, gps_start, gps_end, event_pad_s=None):
 
 
 def run_train_noise(args, ifos, output_dir):
+    """Build the training-noise dataset."""
     gps_start = int(args.train_gps_start)
     gps_end = int(args.train_gps_end)
     os.makedirs(output_dir, exist_ok=True)
@@ -1454,6 +1461,7 @@ def run_train_noise(args, ifos, output_dir):
 
 
 def run_test_download(args, ifos, test_root, noise_output_dir, signal_output_dir):
+    """Build the test-noise and/or known-event test datasets"""
     gps_start = int(args.test_gps_start)
     gps_end = int(args.test_gps_end)
     os.makedirs(test_root, exist_ok=True)
@@ -1521,14 +1529,7 @@ def run_test_download(args, ifos, test_root, noise_output_dir, signal_output_dir
                 f"event_gps={event_gps_value:.3f}; events={event_names}",
                 flush=True,
             )
-            downloaded, saved_s, saved_e, _ = download_test_signal_with_availability_fallback(
-                ifos,
-                event_gps_value,
-                event_names,
-                good_intervals,
-                args,
-                signal_output_dir,
-            )
+            downloaded, saved_s, saved_e, _ = download_test_signal_with_availability_fallback( ifos, event_gps_value, event_names, good_intervals, args, signal_output_dir)
             if downloaded:
                 saved_signal.append((saved_s, saved_e))
             else:
@@ -1539,20 +1540,8 @@ def run_test_download(args, ifos, test_root, noise_output_dir, signal_output_dir
                 )
 
     if args.plot_timeline:
-        plot_timeline_all(
-            gps_start,
-            gps_end,
-            cleaned_noise_intervals,
-            event_times,
-            test_root,
-        )
-        plot_timeline_saved(
-            gps_start,
-            gps_end,
-            saved_noise,
-            saved_signal,
-            test_root,
-        )
+        plot_timeline_all(gps_start, gps_end, cleaned_noise_intervals, event_times, test_root)
+        plot_timeline_saved(gps_start, gps_end, saved_noise, saved_signal, test_root)
     if args.plot_timeseries:
         if args.test_noise_enabled:
             plot_saved_timeseries(saved_noise, noise_output_dir, False, "noise", args)
@@ -1569,36 +1558,6 @@ def run_test_download(args, ifos, test_root, noise_output_dir, signal_output_dir
     return saved_noise, saved_signal
 
 
-def validate_runtime_args(args):
-    if args.noise_dir is None:
-        raise ValueError("paths.noise_dir (or --noise_dir) is required.")
-    if args.window_len_s is None or args.min_window_len_s is None:
-        raise ValueError("window_len_s and min_window_len_s are required.")
-    if args.min_window_len_s <= 0 or args.window_len_s <= 0:
-        raise ValueError("window lengths must be positive.")
-    if args.min_window_len_s > args.window_len_s:
-        raise ValueError("min_window_len_s cannot exceed window_len_s.")
-    args.test_enabled = bool(args.test_noise_enabled or args.test_signal_enabled)
-    if not args.train_noise_enabled and not args.test_enabled:
-        raise ValueError(
-            "At least one of train_noise, test.noise, or test.signal must be enabled."
-        )
-    if args.train_noise_enabled:
-        if args.train_gps_start is None or args.train_gps_end is None:
-            raise ValueError("Enabled train_noise requires train_gps_start/train_gps_end.")
-        if int(args.train_gps_start) >= int(args.train_gps_end):
-            raise ValueError("train_gps_start must be earlier than train_gps_end.")
-    if args.test_enabled:
-        if args.test_gps_start is None or args.test_gps_end is None:
-            raise ValueError("Enabled test noise/signal requires test_gps_start/test_gps_end.")
-        if int(args.test_gps_start) >= int(args.test_gps_end):
-            raise ValueError("test_gps_start must be earlier than test_gps_end.")
-    if args.train_noise_enabled and args.test_enabled:
-        if int(args.test_gps_start) < int(args.train_gps_end):
-            raise ValueError(
-                "Test data must begin at or after the end of training data "
-                "to avoid train/test leakage."
-            )
 
 
 def main():
@@ -1642,13 +1601,7 @@ def main():
         train_saved = run_train_noise(args, ifos, train_output_dir)
 
     if args.test_enabled:
-        test_noise_saved, test_signal_saved = run_test_download(
-            args,
-            ifos,
-            test_root,
-            test_noise_output_dir,
-            test_signal_output_dir,
-        )
+        test_noise_saved, test_signal_saved = run_test_download(args, ifos, test_root, test_noise_output_dir, test_signal_output_dir)
 
     print("\nDownloader finished", flush=True)
     print(f"Saved training-noise windows: {len(train_saved)}", flush=True)
