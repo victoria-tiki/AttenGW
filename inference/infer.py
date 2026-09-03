@@ -40,6 +40,13 @@ EPOCH_PATTERN = re.compile(r"epoch=(\d+)")
 
 
 def parse_arguments():
+
+    """
+    Read the two command-line inputs that are allowed to override the inference YAML.
+    The CLI is intentionally small: Most inference settings live in the YAML so a run is reproducible. it only chooses the config file and, optionally, a different output directory for jobs that need their own result folder.
+    """
+    
+    
     parser = argparse.ArgumentParser(
         description="Run one AttenGW checkpoint and write one report per trigger operating point."
     )
@@ -53,6 +60,9 @@ def parse_arguments():
 
 
 def load_yaml(path):
+    """
+    Load a YAML configuration file and require its top level to be a dictionary.
+    """
     with open(path, "r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
     if not isinstance(config, dict):
@@ -61,6 +71,9 @@ def load_yaml(path):
 
 
 def require_mapping(parent, key):
+    """
+    Get a required YAML section and make sure it has ``key: value`` structure.
+    """
     value = parent.get(key)
     if not isinstance(value, dict):
         raise ValueError(f"Config entry '{key}' must be a mapping.")
@@ -68,6 +81,9 @@ def require_mapping(parent, key):
 
 
 def finite_float(value):
+    """
+    Convert a value to a finite float, returning None when that is not possible.
+    """
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -76,6 +92,9 @@ def finite_float(value):
 
 
 def decode_hdf5_value(value):
+    """
+    Convert common HDF5/Numpy metadata types into ordinary Python values.
+    """
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     if isinstance(value, np.ndarray) and value.dtype.kind == "S":
@@ -103,6 +122,8 @@ def gps_to_utc(gps_time):
     except Exception as error:
         return f"unavailable ({type(error).__name__})"
 
+
+# ---------- checkpoint and model loading ----------
 
 def validation_loss_from_checkpoint(path):
     match = VALIDATION_LOSS_PATTERN.search(Path(path).name)
@@ -133,6 +154,9 @@ def choose_lowest_loss_checkpoint(checkpoint_dir):
 
 
 def resolve_checkpoint(paths):
+    """    Resolve either a checkpoint directory or one explicit checkpoint into the files
+    needed for inference.
+    """
     checkpoint_dir = paths.get("checkpoint_dir")
     checkpoint = paths.get("checkpoint")
     checkpoint_dir = None if checkpoint_dir in {None, ""} else checkpoint_dir
@@ -162,6 +186,9 @@ def resolve_checkpoint(paths):
 
 
 def resolve_hdf_files(path_value, description):
+    """
+    Turn an HDF5 path, directory, or glob pattern into a concrete sorted file list.
+    """
     if path_value in {None, ""}:
         raise ValueError(f"{description} path is required.")
 
@@ -180,6 +207,8 @@ def resolve_hdf_files(path_value, description):
 
 
 def first_training_value(training_config, choices, label, default=None, required=False):
+    """for compatability for older configs.yamls: search for training params in other sections
+    """
     for section_name, key in choices:
         section = training_config.get(section_name, {}) or {}
         if key in section and section[key] is not None:
@@ -191,6 +220,9 @@ def first_training_value(training_config, choices, label, default=None, required
 
 
 def training_settings(training_config, inference_config):
+    """
+    Reconstruct the preprocessing settings from the stored training config that inference must match to training.
+    """
     shared = require_mapping(training_config, "shared")
     training = require_mapping(training_config, "training")
 
@@ -268,6 +300,9 @@ def training_settings(training_config, inference_config):
 
 
 def clean_model_name(model_name):
+    """
+    Normalize a model name from the training YAML into the Python module name to import.
+    """
     name = str(model_name).strip().replace("\\", "/").rsplit("/", 1)[-1]
     if name.endswith(".py"):
         name = name[:-3]
@@ -279,6 +314,9 @@ def clean_model_name(model_name):
 
 
 def build_model(training_config):
+    """
+    Construct the model architecture described by the training configuration.
+    """
     model_config = require_mapping(training_config, "model")
     model_name = model_config.get("name")
     if not model_name:
@@ -295,6 +333,9 @@ def build_model(training_config):
 
 
 def checkpoint_state_dict(checkpoint_path, device):
+    """
+    Load the checkpoint file and extract its parameter state dictionary.
+    """
     try:
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     except TypeError:
@@ -308,6 +349,11 @@ def checkpoint_state_dict(checkpoint_path, device):
 
 
 def state_dict_variants(state_dict):
+    """
+    Generate plausible versions of a checkpoint state dict with wrapper prefixes removed. Lightning, DDP, or wrapper modules can save names such as ``model.layer.weight`` or ``module.layer.weight`` even though the bare inference model expects ``layer.weight``. The numerical weights are still correct; only the key names differ. 
+    
+    This helper tries only known whole-dictionary prefixes. Without it, a checkpoint from a wrapped training setup could fail strict loading even when it matches the model.
+    """
     prefixes = ("model.", "module.", "_forward_module.")
     variants = [("unchanged", dict(state_dict))]
     seen = {tuple(state_dict.keys())}
@@ -326,6 +372,9 @@ def state_dict_variants(state_dict):
 
 
 def choose_device(value):
+    """
+    Choose the requested PyTorch device and verify that it is actually available.
+    """
     value = str(value or "auto").lower()
     if value == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -336,6 +385,10 @@ def choose_device(value):
 
 
 def load_model(checkpoint_path, training_config, device):
+    """
+    Build the model, load checkpoint weights strictly, move it to the device, and set
+    evaluation mode.
+    """
     model, model_name, model_kwargs = build_model(training_config)
     raw_state_dict = checkpoint_state_dict(checkpoint_path, device)
     expected = set(model.state_dict().keys())
@@ -361,7 +414,16 @@ def load_model(checkpoint_path, training_config, device):
     )
 
 
+# ---------- trigger configuration ----------
+
 def parse_trigger_config(config):
+    """
+    Expand the trigger YAML into every operating point that should be evaluated.
+    
+    Model inference is expensive, but trying many thresholds or peak widths is cheap.
+    This function builds the full threshold/width sweep up front so the model can score
+    each window once and the same predictions can be reused for every trigger setting.
+    """
     trigger_config = require_mapping(config, "triggers")
     thresholds = sorted({float(value) for value in trigger_config.get("thresholds", [])})
     if not thresholds or any(not np.isfinite(value) or not 0 <= value <= 1 for value in thresholds):
@@ -424,17 +486,29 @@ def parse_trigger_config(config):
 
 
 def operating_point_key(point):
+    """
+    Return a compact dictionary key identifying one trigger operating point.
+    """
     return (point["method"], point["threshold"], point.get("width"))
 
 
 def operating_point_filename(point):
+    """
+    Build the output filename for one trigger operating point.
+    """
     name = f"{point['method']}_threshold_{filename_number(point['threshold'])}"
     if point.get("width") is not None:
         name += f"_width_{point['width']}"
     return name + ".txt"
 
+# ---------- input data and training-consistent preprocessing ----------
 
 def read_detector_file(path):
+    """
+    Read one downloader-produced HDF5 file and return raw H1/L1 strain, PSDs, frequencies,
+    and normalized metadata.
+    
+    """
     required = ["strain_L1", "strain_H1", "psd_L1", "psd_H1", "freqs"]
     with h5py.File(path, "r") as handle:
         missing = [name for name in required if name not in handle]
@@ -468,6 +542,9 @@ def read_detector_file(path):
 
 
 def metadata_messages(attributes, settings, sanity_config):
+    """
+    Check whether important input-file metadata agree with the training preprocessing.
+    """
     messages = []
     strict = bool(sanity_config.get("strict", True))
 
@@ -491,6 +568,24 @@ def metadata_messages(attributes, settings, sanity_config):
 
 
 def effective_sample_zero_gps(attributes):
+    """
+    Return the GPS time corresponding to sample index 0 of the stored strain.
+
+    Most files can use ``gps_start`` directly. However, some older test signal
+    files have a metadata mismatch: the strain was downloaded starting at
+    ``floor(gps_start)``, while the HDF5 kept the original fractional
+    ``gps_start``. Using that fractional value would shift all reconstructed
+    trigger times.
+
+    The correction is therefore conditional:
+
+    1. If ``sample_zero_gps`` is stored explicitly, use it.
+    2. Otherwise, for legacy test-signal files identified by their metadata,
+       use ``floor(gps_start)``.
+    3. For all other files, use ``gps_start`` unchanged.
+
+    In short, this returns the GPS time at which sample index 0 actually occurs.
+    """
     sample_zero = finite_float(attributes.get("sample_zero_gps"))
     if sample_zero is not None:
         return sample_zero, "sample_zero_gps attribute"
@@ -509,7 +604,10 @@ def effective_sample_zero_gps(attributes):
     return stored_start, "gps_start attribute"
 
 
-def make_bandlimited_psds(freqs, psd_l1, psd_h1, settings):
+def make_bandlimited_psds(freqs, psd_l1, psd_h1, settings):    
+    """
+    Build the same band-limited PSD interpolation used by the training data generator.
+    """
     helper = object.__new__(GWDataset)
     helper.dt = 1.0 / settings["sample_rate"]
     helper.psd_floor = settings["psd_floor"]
@@ -523,6 +621,9 @@ def make_bandlimited_psds(freqs, psd_l1, psd_h1, settings):
 
 
 def all_window_starts(raw_length, settings):
+    """
+    List every model-window start produced by the configured offsets and stride.
+    """
     usable_length = raw_length - 2 * settings["edge_buffer"]
     last_start = usable_length - settings["segment_length"]
     if last_start < 0:
@@ -536,6 +637,9 @@ def all_window_starts(raw_length, settings):
 
 
 def choose_context_start(raw_window_start, raw_window_end, raw_length, settings):
+    """
+    Choose a whitening-context slice that fully surrounds one model window.
+    """
     context_length = settings["whitening_context_samples"]
     edge_buffer = settings["edge_buffer"]
     earliest = raw_window_end + edge_buffer - context_length
@@ -550,6 +654,10 @@ def choose_context_start(raw_window_start, raw_window_end, raw_length, settings)
 
 
 def normalize_window(l1_window, h1_window, shared_normalization):
+    """
+    Apply the same per-window centering and optional shared H1/L1 normalization used in
+    training (depends on normalize value in train config).
+    """
     l1_window = np.asarray(l1_window, dtype=np.float64).copy()
     h1_window = np.asarray(h1_window, dtype=np.float64).copy()
     l1_window -= np.mean(l1_window)
@@ -561,7 +669,12 @@ def normalize_window(l1_window, h1_window, shared_normalization):
     return l1_window.astype(np.float32), h1_window.astype(np.float32)
 
 
+# ---------- actual inference, wooo  ----------
+
 def model_predict_batch(model, l1_batch, h1_batch, device):
+    """
+    Stack H1/L1 windows into model input batches and run inference without gradients.
+    """
     inputs = np.stack([l1_batch, h1_batch], axis=-1).astype(np.float32)
     inputs -= inputs.mean(axis=1, keepdims=True)
     tensor = torch.from_numpy(inputs).to(device)
@@ -580,6 +693,9 @@ def model_predict_batch(model, l1_batch, h1_batch, device):
 
 
 def score_file(model, device, raw_l1, raw_h1, psd_l1, psd_h1, settings):
+    """
+    Whiten, normalize, and score every valid model window in one raw detector file.
+    """
     raw_length = min(len(raw_l1), len(raw_h1))
     starts = all_window_starts(raw_length, settings)
     if len(starts) == 0:
@@ -633,7 +749,12 @@ def score_file(model, device, raw_l1, raw_h1, psd_l1, psd_h1, settings):
     return np.concatenate(prediction_batches), np.asarray(scored_starts, dtype=int)
 
 
+# ---------- trigger construction ----------
+
 def moving_average_same(values, width):
+    """
+    For smoothed max: Smooth a one-dimensional prediction trace while keeping the same length.
+    """
     values = np.asarray(values, dtype=float)
     width = int(width)
     if width <= 1 or len(values) == 0:
@@ -648,6 +769,14 @@ def moving_average_same(values, width):
 
 
 def merge_trigger_samples(samples, tolerance_samples):
+    """
+    Merge nearby trigger samples into one representative trigger.
+    
+    Overlapping inference windows and neighboring peaks can report the same physical
+    event several times. Counting all of them separately would inflate trigger counts. 
+    
+    Samples separated by no more than the configured tolerance belong to the same cluster; the latest sample is retained as that cluster's representative.
+    """
     if not samples:
         return []
     samples = sorted(int(value) for value in samples)
@@ -714,7 +843,16 @@ def triggers_for_operating_points(predictions, starts, operating_points, setting
     tolerance_samples = int(round(merge_tolerance_s * settings["sample_rate"]))
     return {key: merge_trigger_samples(samples, tolerance_samples) for key, samples in raw.items()}
 
+# ---------- optional ASD-mismatch diagnostic ----------
+
 def smooth_feature(values, width):
+    """
+    Smooth the ASD feature across neighboring frequency bins.
+    
+    Why:
+        The ASD-mismatch diagnostic is meant to measure broad changes in detector noise,
+        not tiny bin-to-bin fluctuations. A width of one leaves the feature unchanged.
+    """
     width = int(width)
     if width <= 1:
         return values
@@ -724,6 +862,9 @@ def smooth_feature(values, width):
 
 
 def asd_feature(raw_l1, raw_h1, settings, asd_config):
+    """
+    Compress one file's H1/L1 noise spectrum into the feature used for ASD mismatch.
+    """
     nperseg = int(round(float(asd_config.get("welch_seconds", 8.0)) * settings["sample_rate"]))
     if min(len(raw_l1), len(raw_h1)) < nperseg:
         raise ValueError(
@@ -734,21 +875,9 @@ def asd_feature(raw_l1, raw_h1, settings, asd_config):
         raise ValueError("asd_mismatch.welch_overlap must be in [0, 1).")
     noverlap = int(round(overlap * nperseg))
 
-    freqs, psd_l1 = welch(
-        raw_l1,
-        fs=settings["sample_rate"],
-        nperseg=nperseg,
-        noverlap=noverlap,
-        detrend="constant",
-        scaling="density",
-    )
-    freqs_h1, psd_h1 = welch(
-        raw_h1,
-        fs=settings["sample_rate"],
-        nperseg=nperseg,
-        noverlap=noverlap,
-        detrend="constant",
-        scaling="density",
+    freqs, psd_l1 = welch(raw_l1, fs=settings["sample_rate"], nperseg=nperseg, noverlap=noverlap, detrend="constant", scaling="density")
+    
+    freqs_h1, psd_h1 = welch(raw_h1, fs=settings["sample_rate"], nperseg=nperseg, noverlap=noverlap, detrend="constant", scaling="density",
     )
     if not np.allclose(freqs, freqs_h1):
         raise RuntimeError("Welch frequency grids differ between detectors.")
@@ -764,6 +893,9 @@ def asd_feature(raw_l1, raw_h1, settings, asd_config):
 
 
 def build_training_asd_reference(training_files, settings, asd_config, sanity_config):
+    """
+    Build the set of ASD features that represents the training-noise distribution.
+    """
     features = []
     print(f"Building full-file ASD reference from {len(training_files)} training file(s)...")
     for index, path in enumerate(training_files, start=1):
@@ -785,6 +917,9 @@ def build_training_asd_reference(training_files, settings, asd_config, sanity_co
 
 
 def compute_asd_mismatch(raw_l1, raw_h1, settings, asd_config, training_features, k_nearest):
+    """
+    Measure how different one evaluation file's ASD is from its nearest training ASDs.
+    """
     feature = asd_feature(raw_l1, raw_h1, settings, asd_config)
     if feature.shape != training_features.shape[1:]:
         raise ValueError("Evaluation ASD feature does not match the training frequency grid.")
@@ -792,8 +927,17 @@ def compute_asd_mismatch(raw_l1, raw_h1, settings, asd_config, training_features
     nearest = np.sort(distances)[:k_nearest]
     return float(np.exp(np.mean(nearest)))
 
+# ---------- trigger classification and reporting ----------
 
 def classify_file(record, trigger_samples, event_tolerance_s, sample_rate):
+    """
+    Classify a file's triggers as event-window triggers, false positives, or unclassified.
+    
+    If event metadata and a usable sample-zero GPS exist, we record true recoveries and off-event triggers count as false positives.``mode=noise`` files treat
+    all triggers as false positives. Files lacking enough timing/classification metadata
+    are kept as unclassified rather than guessed.
+    """
+    
     attributes = record.get("attributes", {})
     mode = str(attributes.get("mode", "")).strip().lower()
     event_gps = finite_float(attributes.get("event_gps"))
@@ -850,6 +994,8 @@ def classify_file(record, trigger_samples, event_tolerance_s, sample_rate):
 
 
 def display_attribute(attributes, key):
+    """
+    Convert an HDF5 metadata value into readable report text."""
     value = attributes.get(key)
     if value is None or value == "":
         return "unavailable"
@@ -859,6 +1005,8 @@ def display_attribute(attributes, key):
 
 
 def write_report(path, point, records, run_info, event_tolerance_s):
+    """
+    Write one complete inference report for one trigger operating point."""
     successful = [record for record in records if record["status"] == "ok"]
     failed = [record for record in records if record["status"] == "failed"]
     key = operating_point_key(point)
