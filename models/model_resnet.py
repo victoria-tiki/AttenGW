@@ -20,15 +20,7 @@ class ResBlock1D(nn.Module):
     If stride > 1 or channel count changes, the shortcut uses a 1x1 projection.
     """
 
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int = 7,
-        stride: int = 1,
-        norm_groups: int = 16,
-        dropout: float = 0.0,
-    ):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 7, stride: int = 1, norm_groups: int = 16, dropout: float = 0.0):
         super().__init__()
 
         if kernel_size % 2 == 0:
@@ -36,23 +28,9 @@ class ResBlock1D(nn.Module):
 
         padding = kernel_size // 2
 
-        self.conv1 = nn.Conv1d(
-            in_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            bias=False,
-        )
+        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
         self.norm1 = make_norm(out_channels, norm_groups)
-        self.conv2 = nn.Conv1d(
-            out_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            stride=1,
-            padding=padding,
-            bias=False,
-        )
+        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=kernel_size, stride=1, padding=padding, bias=False)
         self.norm2 = make_norm(out_channels, norm_groups)
 
         self.dropout = nn.Dropout(dropout)
@@ -60,13 +38,7 @@ class ResBlock1D(nn.Module):
 
         if stride != 1 or in_channels != out_channels:
             self.shortcut = nn.Sequential(
-                nn.Conv1d(
-                    in_channels,
-                    out_channels,
-                    kernel_size=1,
-                    stride=stride,
-                    bias=False,
-                ),
+                nn.Conv1d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
                 make_norm(out_channels, norm_groups),
             )
         else:
@@ -95,39 +67,16 @@ class ResStage1D(nn.Module):
     First block may downsample with stride=2.
     """
 
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        n_blocks: int,
-        first_stride: int,
-        kernel_size: int = 7,
-        norm_groups: int = 16,
-        dropout: float = 0.0,
-    ):
+    def __init__(self, in_channels: int, out_channels: int, n_blocks: int, first_stride: int, kernel_size: int = 7, norm_groups: int = 16, dropout: float = 0.0):
         super().__init__()
 
         blocks = [
-            ResBlock1D(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=kernel_size,
-                stride=first_stride,
-                norm_groups=norm_groups,
-                dropout=dropout,
-            )
+            ResBlock1D(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=first_stride, norm_groups=norm_groups, dropout=dropout)
         ]
 
         for _ in range(n_blocks - 1):
             blocks.append(
-                ResBlock1D(
-                    in_channels=out_channels,
-                    out_channels=out_channels,
-                    kernel_size=kernel_size,
-                    stride=1,
-                    norm_groups=norm_groups,
-                    dropout=dropout,
-                )
+                ResBlock1D(in_channels=out_channels, out_channels=out_channels, kernel_size=kernel_size, stride=1, norm_groups=norm_groups, dropout=dropout)
             )
 
         self.blocks = nn.Sequential(*blocks)
@@ -153,35 +102,14 @@ class DenseResNetFPN1D(nn.Module):
         dense output at original sequence length
     """
 
-    def __init__(
-        self,
-        in_channels: int = 2,
-        base_channels: int = 64,
-        fpn_channels: int = 128,
-        layers=(3, 4, 6, 3),
-        kernel_size: int = 7,
-        norm_groups: int = 16,
-        dropout: float = 0.0,
-    ):
+    def __init__(self, in_channels: int = 2, base_channels: int = 64, fpn_channels: int = 128, layers=(3, 4, 6, 3), kernel_size: int = 7, norm_groups: int = 16, dropout: float = 0.0):
         super().__init__()
 
         self.stem = nn.Sequential(
-            nn.Conv1d(
-                in_channels,
-                base_channels,
-                kernel_size=15,
-                padding=7,
-                bias=False,
-            ),
+            nn.Conv1d(in_channels,base_channels,kernel_size=15,padding=7,bias=False),
             make_norm(base_channels, norm_groups),
             nn.ReLU(inplace=True),
-            nn.Conv1d(
-                base_channels,
-                base_channels,
-                kernel_size=7,
-                padding=3,
-                bias=False,
-            ),
+            nn.Conv1d(base_channels, base_channels, kernel_size=7, padding=3, bias=False),
             make_norm(base_channels, norm_groups),
             nn.ReLU(inplace=True),
         )
@@ -193,45 +121,10 @@ class DenseResNetFPN1D(nn.Module):
         c3 = base_channels * 4
         c4 = base_channels * 8
 
-        self.stage1 = ResStage1D(
-            in_channels=base_channels,
-            out_channels=c1,
-            n_blocks=layers[0],
-            first_stride=1,
-            kernel_size=kernel_size,
-            norm_groups=norm_groups,
-            dropout=dropout,
-        )
-
-        self.stage2 = ResStage1D(
-            in_channels=c1,
-            out_channels=c2,
-            n_blocks=layers[1],
-            first_stride=2,
-            kernel_size=kernel_size,
-            norm_groups=norm_groups,
-            dropout=dropout,
-        )
-
-        self.stage3 = ResStage1D(
-            in_channels=c2,
-            out_channels=c3,
-            n_blocks=layers[2],
-            first_stride=2,
-            kernel_size=kernel_size,
-            norm_groups=norm_groups,
-            dropout=dropout,
-        )
-
-        self.stage4 = ResStage1D(
-            in_channels=c3,
-            out_channels=c4,
-            n_blocks=layers[3],
-            first_stride=2,
-            kernel_size=kernel_size,
-            norm_groups=norm_groups,
-            dropout=dropout,
-        )
+        self.stage1 = ResStage1D(in_channels=base_channels, out_channels=c1, n_blocks=layers[0], first_stride=1, kernel_size=kernel_size, norm_groups=norm_groups, dropout=dropout)
+        self.stage2 = ResStage1D(in_channels=c1, out_channels=c2, n_blocks=layers[1], first_stride=2, kernel_size=kernel_size, norm_groups=norm_groups, dropout=dropout)
+        self.stage3 = ResStage1D(in_channels=c2, out_channels=c3, n_blocks=layers[2], first_stride=2, kernel_size=kernel_size, norm_groups=norm_groups, dropout=dropout)
+        self.stage4 = ResStage1D(in_channels=c3, out_channels=c4, n_blocks=layers[3], first_stride=2, kernel_size=kernel_size, norm_groups=norm_groups, dropout=dropout)
 
         # Lateral projections for FPN.
         self.lat1 = nn.Conv1d(c1, fpn_channels, kernel_size=1)
@@ -284,38 +177,18 @@ class DenseResNetFPN1D(nn.Module):
 
         p4 = self.lat4(c4)
 
-        p3 = self.lat3(c3) + F.interpolate(
-            p4,
-            size=c3.shape[-1],
-            mode="linear",
-            align_corners=False,
-        )
+        p3 = self.lat3(c3) + F.interpolate(p4, size=c3.shape[-1], mode="linear", align_corners=False)
         p3 = self.smooth3(p3)
 
-        p2 = self.lat2(c2) + F.interpolate(
-            p3,
-            size=c2.shape[-1],
-            mode="linear",
-            align_corners=False,
-        )
+        p2 = self.lat2(c2) + F.interpolate(p3, size=c2.shape[-1], mode="linear", align_corners=False)
         p2 = self.smooth2(p2)
 
-        p1 = self.lat1(c1) + F.interpolate(
-            p2,
-            size=c1.shape[-1],
-            mode="linear",
-            align_corners=False,
-        )
+        p1 = self.lat1(c1) + F.interpolate(p2, size=c1.shape[-1], mode="linear", align_corners=False)
         p1 = self.smooth1(p1)
 
         # In case padding/stride creates an off-by-one, force exact input length.
         if p1.shape[-1] != input_len:
-            p1 = F.interpolate(
-                p1,
-                size=input_len,
-                mode="linear",
-                align_corners=False,
-            )
+            p1 = F.interpolate(p1, size=input_len, mode="linear", align_corners=False)
 
         logits = self.output_head(p1)
         return logits
@@ -335,29 +208,12 @@ class full_module(nn.Module):
     If using BCEWithLogitsLoss, instantiate with return_logits=True.
     """
 
-    def __init__(
-        self,
-        *args,
-        base_channels: int = 64,
-        fpn_channels: int = 128,
-        layers=(3, 4, 6, 3),
-        dropout: float = 0.0,
-        return_logits: bool = False,
-        **kwargs,
-    ):
+    def __init__(self, *args, base_channels: int = 64, fpn_channels: int = 128, layers=(3, 4, 6, 3), dropout: float = 0.0, return_logits: bool = False, **kwargs):
         super().__init__()
 
         self.return_logits = return_logits
 
-        self.model = DenseResNetFPN1D(
-            in_channels=2,
-            base_channels=base_channels,
-            fpn_channels=fpn_channels,
-            layers=layers,
-            kernel_size=7,
-            norm_groups=16,
-            dropout=dropout,
-        )
+        self.model = DenseResNetFPN1D(in_channels=2, base_channels=base_channels, fpn_channels=fpn_channels, layers=layers, kernel_size=7, norm_groups=16, dropout=dropout)
 
     def forward(self, x):
         if x.ndim != 3:

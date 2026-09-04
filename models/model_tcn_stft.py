@@ -5,13 +5,7 @@ import torch.nn.functional as F
 
 
 class ResidualTCNBlock(nn.Module):
-    def __init__(
-        self,
-        channels: int,
-        kernel_size: int = 7,
-        dilation: int = 1,
-        dropout: float = 0.0,
-    ):
+    def __init__(self,channels: int,kernel_size: int = 7,dilation: int = 1,dropout: float = 0.0):
         super().__init__()
 
         if kernel_size % 2 == 0:
@@ -19,22 +13,10 @@ class ResidualTCNBlock(nn.Module):
 
         padding = dilation * (kernel_size - 1) // 2
 
-        self.conv1 = nn.Conv1d(
-            channels,
-            channels,
-            kernel_size=kernel_size,
-            padding=padding,
-            dilation=dilation,
-        )
+        self.conv1 = nn.Conv1d(channels,channels,kernel_size=kernel_size,padding=padding,dilation=dilation)
         self.norm1 = nn.BatchNorm1d(channels)
 
-        self.conv2 = nn.Conv1d(
-            channels,
-            channels,
-            kernel_size=kernel_size,
-            padding=padding,
-            dilation=dilation,
-        )
+        self.conv2 = nn.Conv1d(channels,channels,kernel_size=kernel_size,padding=padding,dilation=dilation)
         self.norm2 = nn.BatchNorm1d(channels)
 
         self.dropout = nn.Dropout(dropout)
@@ -67,14 +49,7 @@ class TimeBranch(nn.Module):
         features: (batch, channels, time)
     """
 
-    def __init__(
-        self,
-        channels: int = 32,
-        input_kernel_size: int = 15,
-        block_kernel_size: int = 7,
-        dilations=None,
-        dropout: float = 0.0,
-    ):
+    def __init__(self, channels: int = 32, input_kernel_size: int = 15, block_kernel_size: int = 7, dilations=None, dropout: float = 0.0):
         super().__init__()
 
         if dilations is None:
@@ -83,22 +58,12 @@ class TimeBranch(nn.Module):
         if input_kernel_size % 2 == 0:
             raise ValueError("input_kernel_size should be odd to preserve sequence length.")
 
-        self.input_conv = nn.Conv1d(
-            in_channels=2,
-            out_channels=channels,
-            kernel_size=input_kernel_size,
-            padding=input_kernel_size // 2,
-        )
+        self.input_conv = nn.Conv1d(in_channels=2, out_channels=channels, kernel_size=input_kernel_size, padding=input_kernel_size // 2)
         self.input_norm = nn.BatchNorm1d(channels)
 
         self.blocks = nn.ModuleList(
             [
-                ResidualTCNBlock(
-                    channels=channels,
-                    kernel_size=block_kernel_size,
-                    dilation=d,
-                    dropout=dropout,
-                )
+                ResidualTCNBlock(channels=channels, kernel_size=block_kernel_size, dilation=d, dropout=dropout)
                 for d in dilations
             ]
         )
@@ -131,10 +96,7 @@ class SinusoidalPositionalEncoding(nn.Module):
         pe = torch.zeros(max_len, dim)
         position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
 
-        div_term = torch.exp(
-            torch.arange(0, dim, 2, dtype=torch.float32)
-            * (-math.log(10000.0) / dim)
-        )
+        div_term = torch.exp(torch.arange(0, dim, 2, dtype=torch.float32)* (-math.log(10000.0) / dim))
 
         pe[:, 0::2] = torch.sin(position * div_term)
 
@@ -171,19 +133,7 @@ class STFTTransformerBranch(nn.Module):
         features: (batch, channels, time)
     """
 
-    def __init__(
-        self,
-        channels: int = 32,
-        n_fft: int = 128,
-        hop_length: int = 16,
-        win_length: int = 128,
-        transformer_dim: int = 64,
-        num_heads: int = 2,
-        num_layers: int = 1,
-        ff_multiplier: int = 2,
-        dropout: float = 0.0,
-        max_frames: int = 1024,
-    ):
+    def __init__(self,channels: int = 32,n_fft: int = 128,hop_length: int = 16,win_length: int = 128,transformer_dim: int = 64,num_heads: int = 2,num_layers: int = 1,ff_multiplier: int = 2, dropout: float = 0.0, max_frames: int = 1024):
         super().__init__()
 
         if transformer_dim % num_heads != 0:
@@ -210,25 +160,11 @@ class STFTTransformerBranch(nn.Module):
             nn.Dropout(dropout),
         )
 
-        self.pos_enc = SinusoidalPositionalEncoding(
-            dim=transformer_dim,
-            max_len=max_frames,
-        )
+        self.pos_enc = SinusoidalPositionalEncoding(dim=transformer_dim, max_len=max_frames)
 
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=transformer_dim,
-            nhead=num_heads,
-            dim_feedforward=ff_multiplier * transformer_dim,
-            dropout=dropout,
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
-        )
+        encoder_layer = nn.TransformerEncoderLayer(d_model=transformer_dim,nhead=num_heads,dim_feedforward=ff_multiplier * transformer_dim,dropout=dropout,activation="gelu",batch_first=True,norm_first=True)
 
-        self.transformer = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers=num_layers,
-        )
+        self.transformer = nn.TransformerEncoder(encoder_layer,num_layers=num_layers)
 
         # Project each STFT-frame token back to channels, then interpolate
         # along frame-time to the original sample-time.
@@ -256,15 +192,7 @@ class STFTTransformerBranch(nn.Module):
         x_flat = x_det.view(batch_size * 2, seq_len)
 
         # STFT: (B*2, F, frames), complex
-        stft = torch.stft(
-            x_flat,
-            n_fft=self.n_fft,
-            hop_length=self.hop_length,
-            win_length=self.win_length,
-            window=self.window.to(device=x.device, dtype=x.dtype),
-            center=True,
-            return_complex=True,
-        )
+        stft = torch.stft(x_flat, n_fft=self.n_fft, hop_length=self.hop_length, win_length=self.win_length, window=self.window.to(device=x.device, dtype=x.dtype), center=True,return_complex=True)
 
         # Log magnitude: (B*2, F, frames)
         mag = torch.log1p(stft.abs())
@@ -296,12 +224,7 @@ class STFTTransformerBranch(nn.Module):
         frame_features = frame_features.permute(0, 2, 1)
 
         # Upsample STFT-frame features back to original sample length.
-        features = F.interpolate(
-            frame_features,
-            size=seq_len,
-            mode="linear",
-            align_corners=False,
-        )
+        features = F.interpolate(frame_features,size=seq_len,mode="linear",align_corners=False)
 
         return features
 
@@ -329,42 +252,14 @@ class full_module(nn.Module):
         full_module(return_logits=True)
     """
 
-    def __init__(
-        self,
-        *args,
-        time_channels: int = 32,
-        tf_channels: int = 32,
-        n_fft: int = 128,
-        hop_length: int = 16,
-        win_length: int = 128,
-        transformer_dim: int = 64,
-        num_heads: int = 2,
-        num_layers: int = 1,
-        ff_multiplier: int = 2,
-        dropout: float = 0.0,
-        return_logits: bool = False,
-        **kwargs,
-    ):
+    def __init__(self,*args,time_channels: int = 32,tf_channels: int = 32,n_fft: int = 128,hop_length: int = 16,win_length: int = 128,transformer_dim: int = 64,num_heads: int = 2,num_layers: int = 1,ff_multiplier: int = 2,dropout: float = 0.0,return_logits: bool = False,**kwargs):
         super().__init__()
 
         self.return_logits = return_logits
 
-        self.time_branch = TimeBranch(
-            channels=time_channels,
-            dropout=dropout,
-        )
+        self.time_branch = TimeBranch(channels=time_channels,dropout=dropout)
 
-        self.tf_branch = STFTTransformerBranch(
-            channels=tf_channels,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            win_length=win_length,
-            transformer_dim=transformer_dim,
-            num_heads=num_heads,
-            num_layers=num_layers,
-            ff_multiplier=ff_multiplier,
-            dropout=dropout,
-        )
+        self.tf_branch = STFTTransformerBranch(channels=tf_channels,n_fft=n_fft,hop_length=hop_length,win_length=win_length,transformer_dim=transformer_dim,num_heads=num_heads, num_layers=num_layers, ff_multiplier=ff_multiplier, dropout=dropout)
 
         fused_channels = time_channels + tf_channels
 

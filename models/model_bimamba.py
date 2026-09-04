@@ -20,35 +20,19 @@ class LocalConvEmbedding(nn.Module):
         x: (batch, time, hidden_dim)
     """
 
-    def __init__(
-        self,
-        input_channels: int = 2,
-        hidden_dim: int = 64,
-        kernel_size: int = 15,
-        dropout: float = 0.0,
-    ):
+    def __init__(self, input_channels: int = 2, hidden_dim: int = 64, kernel_size: int = 15, dropout: float = 0.0):
         super().__init__()
 
         if kernel_size % 2 == 0:
             raise ValueError("kernel_size should be odd to preserve sequence length.")
 
         self.net = nn.Sequential(
-            nn.Conv1d(
-                in_channels=input_channels,
-                out_channels=hidden_dim,
-                kernel_size=kernel_size,
-                padding=kernel_size // 2,
-            ),
+            nn.Conv1d(in_channels=input_channels, out_channels=hidden_dim, kernel_size=kernel_size, padding=kernel_size // 2),
             nn.BatchNorm1d(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
 
-            nn.Conv1d(
-                in_channels=hidden_dim,
-                out_channels=hidden_dim,
-                kernel_size=7,
-                padding=3,
-            ),
+            nn.Conv1d(in_channels=hidden_dim, out_channels=hidden_dim, kernel_size=7, padding=3),
             nn.BatchNorm1d(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
@@ -84,14 +68,7 @@ class BiMambaResidualBlock(nn.Module):
         residual connection
     """
 
-    def __init__(
-        self,
-        dim: int = 64,
-        d_state: int = 16,
-        d_conv: int = 4,
-        expand: int = 2,
-        dropout: float = 0.0,
-    ):
+    def __init__(self, dim: int = 64, d_state: int = 16, d_conv: int = 4, expand: int = 2, dropout: float = 0.0):
         super().__init__()
 
         if Mamba is None:
@@ -103,19 +80,9 @@ class BiMambaResidualBlock(nn.Module):
 
         self.norm = nn.LayerNorm(dim)
 
-        self.mamba_fwd = Mamba(
-            d_model=dim,
-            d_state=d_state,
-            d_conv=d_conv,
-            expand=expand,
-        )
+        self.mamba_fwd = Mamba(d_model=dim, d_state=d_state, d_conv=d_conv, expand=expand)
 
-        self.mamba_bwd = Mamba(
-            d_model=dim,
-            d_state=d_state,
-            d_conv=d_conv,
-            expand=expand,
-        )
+        self.mamba_bwd = Mamba(d_model=dim, d_state=d_state, d_conv=d_conv, expand=expand)
 
         self.proj = nn.Linear(2 * dim, dim)
         self.dropout = nn.Dropout(dropout)
@@ -161,30 +128,13 @@ class full_module(nn.Module):
         full_module(return_logits=True)
     """
 
-    def __init__(
-        self,
-        *args,
-        hidden_dim: int = 64,
-        num_layers: int = 4,
-        d_state: int = 16,
-        d_conv: int = 4,
-        expand: int = 2,
-        local_kernel_size: int = 15,
-        dropout: float = 0.0,
-        return_logits: bool = False,
-        **kwargs,
-    ):
+    def __init__(self, *args, hidden_dim: int = 64, num_layers: int = 4, d_state: int = 16, d_conv: int = 4, expand: int = 2, local_kernel_size: int = 15, dropout: float = 0.0, return_logits: bool = False, **kwargs):
         super().__init__()
 
         self.hidden_dim = hidden_dim
         self.return_logits = return_logits
 
-        self.embedding = LocalConvEmbedding(
-            input_channels=2,
-            hidden_dim=hidden_dim,
-            kernel_size=local_kernel_size,
-            dropout=dropout,
-        )
+        self.embedding = LocalConvEmbedding(input_channels=2, hidden_dim=hidden_dim, kernel_size=local_kernel_size, dropout=dropout)
 
         self.blocks = nn.ModuleList(
             [

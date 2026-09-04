@@ -24,38 +24,21 @@ class SubModule(nn.Module):
 
         self.convs_f = nn.ModuleList(
             [
-                nn.Conv1d(
-                    16,
-                    self.n_filters,
-                    kernel_size=self.filter_width,
-                    padding="same",
-                    dilation=dilation_rate,
-                )
+                nn.Conv1d(16, self.n_filters, kernel_size=self.filter_width, padding="same", dilation=dilation_rate)
                 for dilation_rate in self.dilation_rates
             ]
         )
 
         self.convs_g = nn.ModuleList(
             [
-                nn.Conv1d(
-                    16,
-                    self.n_filters,
-                    kernel_size=self.filter_width,
-                    padding="same",
-                    dilation=dilation_rate,
-                )
+                nn.Conv1d(16, self.n_filters, kernel_size=self.filter_width, padding="same", dilation=dilation_rate)
                 for dilation_rate in self.dilation_rates
             ]
         )
 
         self.conv2 = nn.ModuleList(
             [
-                nn.Conv1d(
-                    self.n_filters,
-                    16,
-                    kernel_size=1,
-                    padding="same",
-                )
+                nn.Conv1d(self.n_filters, 16, kernel_size=1, padding="same")
                 for _ in self.dilation_rates
             ]
         )
@@ -93,14 +76,7 @@ class TemporalSelfAttentionBlock(nn.Module):
         x: (batch, channels, time)
     """
 
-    def __init__(
-        self,
-        channels: int = 32,
-        num_heads: int = 1,
-        dropout: float = 0.0,
-        use_ffn: bool = False,
-        ff_multiplier: int = 2,
-    ):
+    def __init__(self, channels: int = 32, num_heads: int = 1, dropout: float = 0.0, use_ffn: bool = False, ff_multiplier: int = 2):
         super().__init__()
 
         if channels % num_heads != 0:
@@ -110,13 +86,7 @@ class TemporalSelfAttentionBlock(nn.Module):
 
         self.use_ffn = use_ffn
 
-        self.attn = nn.MultiheadAttention(
-            embed_dim=channels,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
-
+        self.attn = nn.MultiheadAttention(embed_dim=channels, num_heads=num_heads, dropout=dropout, batch_first=True)
         self.attn_out = nn.Linear(channels, channels)
         self.norm_attn = nn.LayerNorm(channels)
         self.dropout = nn.Dropout(dropout)
@@ -136,12 +106,7 @@ class TemporalSelfAttentionBlock(nn.Module):
         # Attention format: (B, T, C)
         x_seq = x.permute(0, 2, 1)
 
-        attn_out, _ = self.attn(
-            query=x_seq,
-            key=x_seq,
-            value=x_seq,
-            need_weights=False,
-        )
+        attn_out, _ = self.attn(query=x_seq, key=x_seq, value=x_seq, need_weights=False)
 
         attn_out = self.attn_out(attn_out)
         x_seq = self.norm_attn(x_seq + self.dropout(attn_out))
@@ -177,17 +142,7 @@ class full_module(nn.Module):
         full_module(return_logits=True)
     """
 
-    def __init__(
-        self,
-        *args,
-        hidden_channels: int = 32,
-        num_heads: int = 1,
-        dropout: float = 0.0,
-        use_ffn: bool = False,
-        ff_multiplier: int = 2,
-        return_logits: bool = False,
-        **kwargs,
-    ):
+    def __init__(self, *args, hidden_channels: int = 32, num_heads: int = 1, dropout: float = 0.0, use_ffn: bool = False, ff_multiplier: int = 2, return_logits: bool = False, **kwargs):
         super(full_module, self).__init__()
 
         self.return_logits = return_logits
@@ -205,13 +160,7 @@ class full_module(nn.Module):
             nn.Dropout(dropout),
         )
 
-        self.temporal_attention = TemporalSelfAttentionBlock(
-            channels=hidden_channels,
-            num_heads=num_heads,
-            dropout=dropout,
-            use_ffn=use_ffn,
-            ff_multiplier=ff_multiplier,
-        )
+        self.temporal_attention = TemporalSelfAttentionBlock(channels=hidden_channels, num_heads=num_heads, dropout=dropout, use_ffn=use_ffn,ff_multiplier=ff_multiplier)
 
         self.output_head = nn.Sequential(
             nn.Conv1d(hidden_channels, hidden_channels, kernel_size=7, padding=3),

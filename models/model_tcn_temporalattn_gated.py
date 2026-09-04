@@ -4,13 +4,7 @@ import torch.nn.functional as F
 
 
 class ResidualTCNBlock(nn.Module):
-    def __init__(
-        self,
-        channels: int,
-        kernel_size: int = 7,
-        dilation: int = 1,
-        dropout: float = 0.0,
-    ):
+    def __init__(self,channels: int,kernel_size: int = 7,dilation: int = 1,dropout: float = 0.0):
         super().__init__()
 
         if kernel_size % 2 == 0:
@@ -18,22 +12,10 @@ class ResidualTCNBlock(nn.Module):
 
         padding = dilation * (kernel_size - 1) // 2
 
-        self.conv1 = nn.Conv1d(
-            in_channels=channels,
-            out_channels=channels,
-            kernel_size=kernel_size,
-            padding=padding,
-            dilation=dilation,
-        )
+        self.conv1 = nn.Conv1d(in_channels=channels,out_channels=channels,kernel_size=kernel_size,padding=padding,dilation=dilation)
         self.norm1 = nn.BatchNorm1d(channels)
 
-        self.conv2 = nn.Conv1d(
-            in_channels=channels,
-            out_channels=channels,
-            kernel_size=kernel_size,
-            padding=padding,
-            dilation=dilation,
-        )
+        self.conv2 = nn.Conv1d(in_channels=channels,out_channels=channels,kernel_size=kernel_size,padding=padding,dilation=dilation)
         self.norm2 = nn.BatchNorm1d(channels)
 
         self.dropout = nn.Dropout(dropout)
@@ -66,14 +48,7 @@ class EarlyFusionTCNStem(nn.Module):
         (batch, channels, time)
     """
 
-    def __init__(
-        self,
-        channels: int = 32,
-        input_kernel_size: int = 15,
-        block_kernel_size: int = 7,
-        dilations=None,
-        dropout: float = 0.0,
-    ):
+    def __init__(self,channels: int = 32,input_kernel_size: int = 15,block_kernel_size: int = 7,dilations=None,dropout: float = 0.0):
         super().__init__()
 
         if dilations is None:
@@ -82,22 +57,12 @@ class EarlyFusionTCNStem(nn.Module):
         if input_kernel_size % 2 == 0:
             raise ValueError("input_kernel_size should be odd to preserve sequence length.")
 
-        self.input_conv = nn.Conv1d(
-            in_channels=2,
-            out_channels=channels,
-            kernel_size=input_kernel_size,
-            padding=input_kernel_size // 2,
-        )
+        self.input_conv = nn.Conv1d(in_channels=2,out_channels=channels,kernel_size=input_kernel_size,padding=input_kernel_size // 2)
         self.input_norm = nn.BatchNorm1d(channels)
 
         self.blocks = nn.ModuleList(
             [
-                ResidualTCNBlock(
-                    channels=channels,
-                    kernel_size=block_kernel_size,
-                    dilation=d,
-                    dropout=dropout,
-                )
+                ResidualTCNBlock(channels=channels,kernel_size=block_kernel_size,dilation=d,dropout=dropout)
                 for d in dilations
             ]
         )
@@ -122,19 +87,9 @@ class GatedTemporalAttentionBlock(nn.Module):
 
     Output:
         x_out: (batch, channels, time)
-
-    Mechanism:
-        attention_context = SelfAttention(x)
-        gate = sigmoid(Conv1d([x, attention_context]))
-        x_out = LayerNorm(x + gate * attention_context)
     """
 
-    def __init__(
-        self,
-        channels: int = 32,
-        num_heads: int = 1,
-        dropout: float = 0.0,
-    ):
+    def __init__(self,channels: int = 32,num_heads: int = 1,dropout: float = 0.0):
         super().__init__()
 
         if channels % num_heads != 0:
@@ -142,12 +97,7 @@ class GatedTemporalAttentionBlock(nn.Module):
                 f"channels={channels} must be divisible by num_heads={num_heads}"
             )
 
-        self.attn = nn.MultiheadAttention(
-            embed_dim=channels,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
+        self.attn = nn.MultiheadAttention(embed_dim=channels,num_heads=num_heads,dropout=dropout,batch_first=True)
 
         self.attn_out = nn.Linear(channels, channels)
 
@@ -164,12 +114,7 @@ class GatedTemporalAttentionBlock(nn.Module):
         # x: (B, C, T)
         x_seq = x.permute(0, 2, 1)  # (B, T, C)
 
-        attn_context, _ = self.attn(
-            query=x_seq,
-            key=x_seq,
-            value=x_seq,
-            need_weights=False,
-        )
+        attn_context, _ = self.attn(query=x_seq,key=x_seq,value=x_seq,need_weights=False)
 
         attn_context = self.attn_out(attn_context)
         attn_context = self.dropout(attn_context)
@@ -206,21 +151,11 @@ class full_module(nn.Module):
         out: (batch, time, 1)
 
     By default, returns sigmoid probabilities for compatibility with BCELoss.
-
     If switching to BCEWithLogitsLoss, instantiate with:
         full_module(return_logits=True)
     """
 
-    def __init__(
-        self,
-        *args,
-        hidden_channels: int = 32,
-        num_heads: int = 1,
-        stem_dilations=None,
-        dropout: float = 0.0,
-        return_logits: bool = False,
-        **kwargs,
-    ):
+    def __init__(self,*args,hidden_channels: int = 32,num_heads: int = 1,stem_dilations=None,dropout: float = 0.0,return_logits: bool = False,**kwargs):
         super().__init__()
 
         if stem_dilations is None:
@@ -228,20 +163,8 @@ class full_module(nn.Module):
 
         self.hidden_channels = hidden_channels
         self.return_logits = return_logits
-
-        self.stem = EarlyFusionTCNStem(
-            channels=hidden_channels,
-            input_kernel_size=15,
-            block_kernel_size=7,
-            dilations=stem_dilations,
-            dropout=dropout,
-        )
-
-        self.gated_attention = GatedTemporalAttentionBlock(
-            channels=hidden_channels,
-            num_heads=num_heads,
-            dropout=dropout,
-        )
+        self.stem = EarlyFusionTCNStem(channels=hidden_channels,input_kernel_size=15,block_kernel_size=7,dilations=stem_dilations,dropout=dropout)
+        self.gated_attention = GatedTemporalAttentionBlock(channels=hidden_channels,num_heads=num_heads,dropout=dropout,)
 
         self.output_head = nn.Sequential(
             nn.Conv1d(hidden_channels, hidden_channels, kernel_size=7, padding=3),

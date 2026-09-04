@@ -4,13 +4,7 @@ import torch.nn.functional as F
 
 
 class ResidualTCNBlock(nn.Module):
-    def __init__(
-        self,
-        channels: int,
-        kernel_size: int = 7,
-        dilation: int = 1,
-        dropout: float = 0.0,
-    ):
+    def __init__(self, channels: int, kernel_size: int = 7, dilation: int = 1, dropout: float = 0.0):
         super().__init__()
 
         if kernel_size % 2 == 0:
@@ -18,22 +12,10 @@ class ResidualTCNBlock(nn.Module):
 
         padding = dilation * (kernel_size - 1) // 2
 
-        self.conv1 = nn.Conv1d(
-            channels,
-            channels,
-            kernel_size=kernel_size,
-            padding=padding,
-            dilation=dilation,
-        )
+        self.conv1 = nn.Conv1d(channels, channels, kernel_size=kernel_size, padding=padding, dilation=dilation)
         self.norm1 = nn.BatchNorm1d(channels)
 
-        self.conv2 = nn.Conv1d(
-            channels,
-            channels,
-            kernel_size=kernel_size,
-            padding=padding,
-            dilation=dilation,
-        )
+        self.conv2 = nn.Conv1d(channels, channels, kernel_size=kernel_size, padding=padding, dilation=dilation)
         self.norm2 = nn.BatchNorm1d(channels)
 
         self.dropout = nn.Dropout(dropout)
@@ -66,13 +48,7 @@ class TCNStem(nn.Module):
     Output: (B, C, T)
     """
 
-    def __init__(
-        self,
-        hidden_channels: int = 32,
-        kernel_size: int = 15,
-        dilations=None,
-        dropout: float = 0.0,
-    ):
+    def __init__(self, hidden_channels: int = 32, kernel_size: int = 15, dilations=None, dropout: float = 0.0):
         super().__init__()
 
         if dilations is None:
@@ -81,12 +57,7 @@ class TCNStem(nn.Module):
         if kernel_size % 2 == 0:
             raise ValueError("kernel_size should be odd to preserve sequence length cleanly.")
 
-        self.input_conv = nn.Conv1d(
-            in_channels=1,
-            out_channels=hidden_channels,
-            kernel_size=kernel_size,
-            padding=kernel_size // 2,
-        )
+        self.input_conv = nn.Conv1d(in_channels=1, out_channels=hidden_channels, kernel_size=kernel_size,padding=kernel_size // 2)
         self.input_norm = nn.BatchNorm1d(hidden_channels)
 
         self.blocks = nn.ModuleList(
@@ -125,12 +96,7 @@ class CrossAttentionBlock(nn.Module):
         B_context: (B, C, T_low), B attending to A
     """
 
-    def __init__(
-        self,
-        channels: int = 32,
-        num_heads: int = 2,
-        dropout: float = 0.0,
-    ):
+    def __init__(self, channels: int = 32, num_heads: int = 2, dropout: float = 0.0):
         super().__init__()
 
         if channels % num_heads != 0:
@@ -138,19 +104,8 @@ class CrossAttentionBlock(nn.Module):
                 f"channels={channels} must be divisible by num_heads={num_heads}"
             )
 
-        self.attn_A_to_B = nn.MultiheadAttention(
-            embed_dim=channels,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
-
-        self.attn_B_to_A = nn.MultiheadAttention(
-            embed_dim=channels,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
+        self.attn_A_to_B = nn.MultiheadAttention(embed_dim=channels, num_heads=num_heads, dropout=dropout, batch_first=True)
+        self.attn_B_to_A = nn.MultiheadAttention(embed_dim=channels, num_heads=num_heads, dropout=dropout, batch_first=True)
 
         self.norm_A = nn.LayerNorm(channels)
         self.norm_B = nn.LayerNorm(channels)
@@ -164,19 +119,8 @@ class CrossAttentionBlock(nn.Module):
         A_seq = A.permute(0, 2, 1)
         B_seq = B.permute(0, 2, 1)
 
-        A_attn, _ = self.attn_A_to_B(
-            query=A_seq,
-            key=B_seq,
-            value=B_seq,
-            need_weights=False,
-        )
-
-        B_attn, _ = self.attn_B_to_A(
-            query=B_seq,
-            key=A_seq,
-            value=A_seq,
-            need_weights=False,
-        )
+        A_attn, _ = self.attn_A_to_B(query=A_seq, key=B_seq, value=B_seq, need_weights=False)
+        B_attn, _ = self.attn_B_to_A(query=B_seq, key=A_seq, value=A_seq, need_weights=False)
 
         # Residual + norm
         A_context = self.norm_A(A_seq + A_attn)
@@ -216,18 +160,7 @@ class full_module(nn.Module):
         full_module(return_logits=True)
     """
 
-    def __init__(
-        self,
-        *args,
-        hidden_channels: int = 32,
-        stem_kernel_size: int = 15,
-        stem_dilations=None,
-        attention_heads: int = 2,
-        downsample_factor: int = 4,
-        dropout: float = 0.0,
-        return_logits: bool = False,
-        **kwargs,
-    ):
+    def __init__(self, *args, hidden_channels: int = 32, stem_kernel_size: int = 15, stem_dilations=None, attention_heads: int = 2, downsample_factor: int = 4, dropout: float = 0.0, return_logits: bool = False, **kwargs):
         super().__init__()
 
         if stem_dilations is None:
@@ -238,41 +171,14 @@ class full_module(nn.Module):
         self.return_logits = return_logits
 
         # Separate detector stems: independent weights for H1/L1.
-        self.stem_A = TCNStem(
-            hidden_channels=hidden_channels,
-            kernel_size=stem_kernel_size,
-            dilations=stem_dilations,
-            dropout=dropout,
-        )
-
-        self.stem_B = TCNStem(
-            hidden_channels=hidden_channels,
-            kernel_size=stem_kernel_size,
-            dilations=stem_dilations,
-            dropout=dropout,
-        )
+        self.stem_A = TCNStem(hidden_channels=hidden_channels, kernel_size=stem_kernel_size, dilations=stem_dilations, dropout=dropout)
+        self.stem_B = TCNStem(hidden_channels=hidden_channels, kernel_size=stem_kernel_size,dilations=stem_dilations,dropout=dropout)
 
         # Separate learned downsampling too, to keep detector branches independent
         # before cross-attention.
-        self.downsample_A = nn.Conv1d(
-            in_channels=hidden_channels,
-            out_channels=hidden_channels,
-            kernel_size=downsample_factor,
-            stride=downsample_factor,
-        )
-
-        self.downsample_B = nn.Conv1d(
-            in_channels=hidden_channels,
-            out_channels=hidden_channels,
-            kernel_size=downsample_factor,
-            stride=downsample_factor,
-        )
-
-        self.cross_attention = CrossAttentionBlock(
-            channels=hidden_channels,
-            num_heads=attention_heads,
-            dropout=dropout,
-        )
+        self.downsample_A = nn.Conv1d(in_channels=hidden_channels,out_channels=hidden_channels,kernel_size=downsample_factor,stride=downsample_factor)
+        self.downsample_B = nn.Conv1d(in_channels=hidden_channels,out_channels=hidden_channels,kernel_size=downsample_factor,stride=downsample_factor)
+        self.cross_attention = CrossAttentionBlock(channels=hidden_channels,num_heads=attention_heads,dropout=dropout)
 
         # We concatenate:
         #   A full-res local features
@@ -292,11 +198,7 @@ class full_module(nn.Module):
             nn.ReLU(),
         )
 
-        self.output_conv = nn.Conv1d(
-            in_channels=hidden_channels,
-            out_channels=1,
-            kernel_size=1,
-        )
+        self.output_conv = nn.Conv1d(in_channels=hidden_channels,out_channels=1,kernel_size=1)
 
     def forward(self, x):
         if x.ndim != 3:
@@ -332,18 +234,8 @@ class full_module(nn.Module):
         A_ctx_low, B_ctx_low = self.cross_attention(A_low, B_low)
 
         # Upsample attention context back to original sequence length.
-        A_ctx = F.interpolate(
-            A_ctx_low,
-            size=seq_len,
-            mode="linear",
-            align_corners=False,
-        )
-        B_ctx = F.interpolate(
-            B_ctx_low,
-            size=seq_len,
-            mode="linear",
-            align_corners=False,
-        )
+        A_ctx = F.interpolate(A_ctx_low, size=seq_len, mode="linear", align_corners=False)
+        B_ctx = F.interpolate(B_ctx_low, size=seq_len, mode="linear", align_corners=False)
 
         # Fuse full-resolution local features with lower-resolution attention context.
         fused = torch.cat([A_feat, B_feat, A_ctx, B_ctx], dim=1)
