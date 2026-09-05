@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "AttenGW: Lightweight Neural Gravitational-Wave Detection in Real LIGO Noise"
+type: software
+version: 1.0.0
+date-released: 2026-09-05
+doi: 10.5281/zenodo.22334693
+repository-code: "https://github.com/victoria-tiki/AttenGW"
+
+authors:
+  - family-names: "Tiki"
+    given-names: "Victoria"
+
+license: MIT
